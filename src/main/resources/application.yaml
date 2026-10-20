@@ -1,3 +1,14 @@
+server:
+  port: ${COMMERCE_SERVICE_PORT:8083}
 spring:
   application:
     name: commerce-service
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
