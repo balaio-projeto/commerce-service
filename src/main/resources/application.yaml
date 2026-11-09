@@ -14,6 +14,14 @@ balaio:
     public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
     issuer: ${JWT_ISSUER:}
     audience: ${JWT_AUDIENCE:}
+payment:
+  mercadopago:
+    environment: ${MERCADOPAGO_ENVIRONMENT:}
+    base-url: ${MERCADOPAGO_BASE_URL:https://api.mercadopago.com}
+    access-token: ${MERCADOPAGO_ACCESS_TOKEN:}
+    webhook-secret: ${MERCADOPAGO_WEBHOOK_SECRET:}
+    notification-url: ${MERCADOPAGO_NOTIFICATION_URL:}
+    frontend-return-url: ${FRONTEND_RETURN_URL:}
 management:
   endpoints:
     web:

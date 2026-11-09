@@ -36,8 +36,7 @@ public class PedidoService {
     private final ObjectMapper json;
     private final boolean workerAtivo;
 
-    public PedidoService(JdbcTemplate jdbc, CatalogoCliente catalogo,
-            TransactionTemplate transacoes, ObjectMapper json,
+    public PedidoService(JdbcTemplate jdbc, CatalogoCliente catalogo, TransactionTemplate transacoes, ObjectMapper json,
             @Value("${balaio.worker.enabled:true}") boolean workerAtivo) {
         this.jdbc = jdbc;
         this.catalogo = catalogo;
@@ -49,22 +48,15 @@ public class PedidoService {
     public record Item(String slug, Integer quantidade) { }
     public record Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco) { }
 
-    @Transactional
     public UUID checkout(Checkout comando, UUID comprador, String chave) {
         if (comprador == null || vazio(chave) || chave.length() > 160)
             throw erro(400, "REQUISICAO_INVALIDA", "Informe a chave idempotente do checkout.");
         String fingerprint = fingerprint(comando);
-        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", comprador + ":" + chave);
-        var existente = jdbc.query("SELECT id, fingerprint_checkout FROM pedidos WHERE comprador_id = ? AND chave_checkout = ?",
-                (rs, row) -> Map.entry((UUID) rs.getObject(1), rs.getString(2)), comprador, chave).stream().findFirst();
-        if (existente.isPresent()) {
-            if (!existente.get().getValue().equals(fingerprint))
-                throw erro(409, "CHECKOUT_CONFLITANTE", "Chave já usada para outra compra.");
-            return existente.get().getKey();
-        }
+        UUID existente = transacoes.execute(status -> buscarCheckoutExistente(comprador, chave, fingerprint));
+        if (existente != null) return existente;
         if (comando == null || comando.itens() == null || comando.itens().isEmpty() || comando.itens().size() > 20
                 || !"padrao".equals(comando.freteId())
-                || !List.of("pix", "cartao", "boleto").contains(comando.meio())
+                || !"checkout_pro".equals(comando.meio())
                 || comando.endereco() == null || List.of("cep", "endereco", "cidade", "estado").stream()
                         .anyMatch(campo -> vazio(comando.endereco().get(campo)))
                 || !comando.endereco().get("cep").matches("[0-9]{5}-?[0-9]{3}")
@@ -88,17 +80,35 @@ public class PedidoService {
             cotados.add(new ItemCotado(item.slug(), item.quantidade(), cotacao.preco(), cotacao.disponibilidade()));
             total = total.add(cotacao.preco().multiply(BigDecimal.valueOf(item.quantidade())));
         }
-        UUID id = UUID.randomUUID();
-        try {
-            jdbc.update("INSERT INTO pedidos(id, comprador_id, artesao_id, estado, chave_checkout, fingerprint_checkout, endereco, frete_id, frete, total, meio) VALUES (?, ?, ?, 'aguardando_reserva', ?, ?, CAST(? AS jsonb), 'padrao', ?, ?, ?)",
-                    id, comprador, artesao, chave, fingerprint, json.writeValueAsString(comando.endereco()), FRETE_PADRAO, total, comando.meio());
-        } catch (JacksonException exception) {
-            throw erro(400, "REQUISICAO_INVALIDA", "Endereço inválido.");
+        UUID artesaoFinal = artesao;
+        BigDecimal totalFinal = total;
+        return transacoes.execute(status -> {
+            UUID jaCriado = buscarCheckoutExistente(comprador, chave, fingerprint);
+            if (jaCriado != null) return jaCriado;
+            UUID id = UUID.randomUUID();
+            try {
+                jdbc.update("INSERT INTO pedidos(id, comprador_id, artesao_id, estado, chave_checkout, fingerprint_checkout, endereco, frete_id, frete, total, meio) VALUES (?, ?, ?, 'aguardando_reserva', ?, ?, CAST(? AS jsonb), 'padrao', ?, ?, ?)",
+                        id, comprador, artesaoFinal, chave, fingerprint, json.writeValueAsString(comando.endereco()), FRETE_PADRAO, totalFinal, comando.meio());
+            } catch (JacksonException exception) {
+                throw erro(400, "REQUISICAO_INVALIDA", "Endereço inválido.");
+            }
+            for (var item : cotados)
+                jdbc.update("INSERT INTO pedido_itens(pedido_id, slug, quantidade, preco, disponibilidade) VALUES (?, ?, ?, ?, ?)",
+                        id, item.slug(), item.quantidade(), item.preco(), item.disponibilidade());
+            return id;
+        });
+    }
+
+    private UUID buscarCheckoutExistente(UUID comprador, String chave, String fingerprint) {
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", comprador + ":" + chave);
+        var existente = jdbc.query("SELECT id, fingerprint_checkout FROM pedidos WHERE comprador_id = ? AND chave_checkout = ?",
+                (rs, row) -> Map.entry((UUID) rs.getObject(1), rs.getString(2)), comprador, chave).stream().findFirst();
+        if (existente.isPresent()) {
+            if (!existente.get().getValue().equals(fingerprint))
+                throw erro(409, "CHECKOUT_CONFLITANTE", "Chave já usada para outra compra.");
+            return existente.get().getKey();
         }
-        for (var item : cotados)
-            jdbc.update("INSERT INTO pedido_itens(pedido_id, slug, quantidade, preco, disponibilidade) VALUES (?, ?, ?, ?, ?)",
-                    id, item.slug(), item.quantidade(), item.preco(), item.disponibilidade());
-        return id;
+        return null;
     }
 
     @Transactional(readOnly = true)
@@ -167,8 +177,10 @@ public class PedidoService {
             throw erro(409, "PEDIDO_CONFLITANTE", "Só é possível recusar antes da produção.");
         if ("cancelado".equals(tipo) && !List.of("aguardando_reserva", "aguardando_pagamento", "confirmado").contains(pedido.estado()))
             throw erro(409, "PEDIDO_CONFLITANTE", "Cancelamento comum não permitido neste estado.");
-        jdbc.update("UPDATE pedidos SET estado = 'encerramento_pendente', encerramento = ?, motivo = ?, atualizado_em = now() WHERE id = ?",
-                tipo, motivo, id);
+        String destino = "aguardando_pagamento".equals(pedido.estado()) ? "cancelamento_pendente"
+                : "aguardando_reserva".equals(pedido.estado()) ? "encerramento_pendente" : "reembolso_pendente";
+        jdbc.update("UPDATE pedidos SET estado = ?, encerramento = ?, motivo = ?, atualizado_em = now() WHERE id = ?",
+                destino, tipo, motivo, id);
         return resposta(obter(id, false));
     }
 
@@ -184,28 +196,6 @@ public class PedidoService {
     }
 
     @Transactional
-    public Map<String, Object> pagamento(UUID id, String eventoId, String resultado) {
-        if (vazio(eventoId) || eventoId.length() > 160 || !List.of("aprovado", "negado").contains(resultado))
-            throw erro(400, "REQUISICAO_INVALIDA", "Evento de pagamento inválido.");
-        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "pagamento:" + eventoId);
-        var pedido = obter(id, true);
-        var anterior = jdbc.query("SELECT pedido_id, resultado FROM eventos_pagamento WHERE id = ?",
-                (rs, row) -> Map.entry((UUID) rs.getObject(1), rs.getString(2)), eventoId).stream().findFirst();
-        if (anterior.isPresent()) {
-            if (anterior.get().getKey().equals(id) && anterior.get().getValue().equals(resultado)) return resposta(pedido);
-            throw erro(409, "PAGAMENTO_CONFLITANTE", "Evento já registrado para outra operação.");
-        }
-        if (!"aguardando_pagamento".equals(pedido.estado()))
-            throw erro(409, "PEDIDO_CONFLITANTE", "Pedido não aguarda pagamento.");
-        jdbc.update("INSERT INTO eventos_pagamento(id, pedido_id, resultado) VALUES (?, ?, ?)", eventoId, id, resultado);
-        if ("aprovado".equals(resultado))
-            jdbc.update("UPDATE pedidos SET estado = 'confirmacao_pendente', atualizado_em = now() WHERE id = ?", id);
-        else
-            jdbc.update("UPDATE pedidos SET estado = 'encerramento_pendente', encerramento = 'falha_pagamento', atualizado_em = now() WHERE id = ?", id);
-        return resposta(obter(id, false));
-    }
-
-    @Transactional
     public Map<String, Object> mediacao(UUID id, UUID decisaoId, String decisao) {
         if (decisaoId == null || !List.of("cancelar_reembolsar", "negar", "manter_conversa").contains(decisao))
             throw erro(400, "REQUISICAO_INVALIDA", "Decisão de mediação inválida.");
@@ -217,44 +207,50 @@ public class PedidoService {
             if (anterior.get().getKey().equals(id) && anterior.get().getValue().equals(decisao)) return resposta(pedido);
             throw erro(409, "MEDIACAO_CONFLITANTE", "Decisão já vinculada a outra operação.");
         }
-        if (pedido.encerramento() != null || List.of("cancelado", "recusado", "reembolsado").contains(pedido.estado()))
+        if (pedido.encerramento() != null || !List.of("confirmado", "producao", "enviado", "entregue")
+                .contains(pedido.estado()))
             throw erro(409, "PEDIDO_CONFLITANTE", "Pedido já encerrado.");
         jdbc.update("INSERT INTO decisoes_mediacao(id, pedido_id, decisao) VALUES (?, ?, ?)", decisaoId, id, decisao);
         if ("cancelar_reembolsar".equals(decisao))
-            jdbc.update("UPDATE pedidos SET estado = 'encerramento_pendente', encerramento = 'reembolsado', atualizado_em = now() WHERE id = ?", id);
+            jdbc.update("UPDATE pedidos SET estado = 'reembolso_pendente', encerramento = 'reembolsado', atualizado_em = now() WHERE id = ?", id);
         return resposta(obter(id, false));
     }
 
     @Scheduled(fixedDelayString = "${balaio.worker.intervalo-ms:5000}")
     public void processarPendentes() {
         if (!workerAtivo) return;
-        var ids = jdbc.query("SELECT id FROM pedidos WHERE (estado = 'aguardando_pagamento' AND atualizado_em < now() - interval '14 minutes') OR (estado IN ('aguardando_reserva', 'confirmacao_pendente', 'encerramento_pendente') AND tentativas < 10 AND atualizado_em < now() - make_interval(secs => least(60, power(2, least(tentativas, 6)))::int)) ORDER BY atualizado_em LIMIT 50",
+        var ids = jdbc.query("SELECT id FROM pedidos WHERE estado IN ('aguardando_reserva', 'confirmacao_pendente', 'encerramento_pendente') AND (tentativas < 10 OR estado = 'encerramento_pendente') AND (processamento_ate IS NULL OR processamento_ate < now()) AND atualizado_em < now() - make_interval(secs => least(60, power(2, least(tentativas, 6)))::int) ORDER BY atualizado_em LIMIT 50",
                 (rs, row) -> (UUID) rs.getObject(1));
         ids.forEach(this::processar);
     }
 
     public void processar(UUID id) {
-        transacoes.executeWithoutResult(status -> {
-            var pedido = obter(id, true);
+        OffsetDateTime lease = OffsetDateTime.now().plusMinutes(2);
+        if (jdbc.update("UPDATE pedidos SET processamento_ate = ? WHERE id = ? "
+                + "AND estado IN ('aguardando_reserva', 'confirmacao_pendente', 'encerramento_pendente') "
+                + "AND (processamento_ate IS NULL OR processamento_ate < now())", lease, id) == 0) return;
+        try {
+            var pedido = obter(id, false);
             try {
                 switch (pedido.estado()) {
                     case "aguardando_reserva" -> reservarItens(pedido);
-                    case "aguardando_pagamento" -> expirarPagamento(pedido);
                     case "confirmacao_pendente" -> confirmarItens(pedido);
                     case "encerramento_pendente" -> liberarItens(pedido);
                     default -> { return; }
                 }
                 jdbc.update("UPDATE pedidos SET tentativas = 0, ultimo_erro = NULL, atualizado_em = now() WHERE id = ?", id);
             } catch (HttpClientErrorException.Conflict conflito) {
-                if ("aguardando_reserva".equals(pedido.estado()) || "confirmacao_pendente".equals(pedido.estado()))
+                if ("aguardando_reserva".equals(pedido.estado()))
                     jdbc.update("UPDATE pedidos SET estado = 'encerramento_pendente', encerramento = ?, ultimo_erro = ?, atualizado_em = now() WHERE id = ?",
-                            "aguardando_reserva".equals(pedido.estado()) ? "falha_reserva" : "falha_pagamento",
+                            "falha_reserva",
                             "Conflito com reserva do catálogo.", id);
                 else registrarFalha(id, conflito);
             } catch (RuntimeException falha) {
                 registrarFalha(id, falha);
             }
-        });
+        } finally {
+            jdbc.update("UPDATE pedidos SET processamento_ate = NULL WHERE id = ? AND processamento_ate = ?", id, lease);
+        }
     }
 
     private void reservarItens(Pedido pedido) {
@@ -271,15 +267,9 @@ public class PedidoService {
             }
             total = total.add(preco.multiply(BigDecimal.valueOf(item.quantidade())));
         }
-        jdbc.update("UPDATE pedidos SET estado = 'aguardando_pagamento', total = ?, atualizado_em = now() WHERE id = ?",
+        jdbc.update("UPDATE pedidos SET estado = 'aguardando_pagamento', total = ?, atualizado_em = now() "
+                        + "WHERE id = ? AND estado = 'aguardando_reserva'",
                 total, pedido.id());
-    }
-
-    private void expirarPagamento(Pedido pedido) {
-        int alteradas = jdbc.update("UPDATE pedidos SET estado = 'encerramento_pendente', encerramento = 'falha_pagamento', motivo = 'Prazo da reserva encerrado sem confirmação de pagamento.', atualizado_em = now() WHERE id = ? AND estado = 'aguardando_pagamento' AND atualizado_em < now() - interval '14 minutes'", pedido.id());
-        if (alteradas > 0) liberarItens(new Pedido(pedido.id(), pedido.comprador(), pedido.artesao(),
-                "encerramento_pendente", "falha_pagamento", pedido.motivo(), pedido.frete(),
-                pedido.total(), pedido.criadoEm()));
     }
 
     private void confirmarItens(Pedido pedido) {
@@ -291,7 +281,8 @@ public class PedidoService {
                         pedido.id(), item.slug());
             }
         }
-        jdbc.update("UPDATE pedidos SET estado = 'confirmado', atualizado_em = now() WHERE id = ?", pedido.id());
+        jdbc.update("UPDATE pedidos SET estado = 'confirmado', atualizado_em = now() "
+                + "WHERE id = ? AND estado = 'confirmacao_pendente'", pedido.id());
     }
 
     private void liberarItens(Pedido pedido) {
@@ -317,7 +308,8 @@ public class PedidoService {
             jdbc.update("UPDATE pedido_itens SET reserva_estado = ? WHERE pedido_id = ? AND slug = ?",
                     estado, pedido.id(), item.slug());
         }
-        jdbc.update("UPDATE pedidos SET estado = ?, atualizado_em = now() WHERE id = ?", pedido.encerramento(), pedido.id());
+        jdbc.update("UPDATE pedidos SET estado = ?, atualizado_em = now() "
+                + "WHERE id = ? AND estado = 'encerramento_pendente'", pedido.encerramento(), pedido.id());
     }
 
     private void registrarFalha(UUID id, RuntimeException falha) {
@@ -354,7 +346,7 @@ public class PedidoService {
         dados.put("estado", pedido.estado());
         dados.put("total", pedido.total());
         dados.put("avaliado", false);
-        dados.put("simulado", true);
+        dados.put("simulado", false);
         dados.put("motivoEncerramento", pedido.motivo());
         dados.put("etapas", List.of(Map.of("estado", pedido.estado(), "titulo", "Situação do pedido",
                 "detalhe", "Acompanhe o andamento desta operação.", "concluida",

@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
@@ -77,6 +78,7 @@ public class JwtCommerceSecurityConfig {
         return http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.POST, "/api/v1/pagamentos/mercado-pago/notificacoes").permitAll()
                         .requestMatchers("/api/v1/checkout", "/api/v1/pedidos/**",
                                 "/api/v1/artesao/pedidos-pendentes", "/api/v1/artesao/vendas").authenticated()
                         .anyRequest().permitAll())

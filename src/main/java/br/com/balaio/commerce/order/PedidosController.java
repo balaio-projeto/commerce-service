@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import br.com.balaio.commerce.payment.CheckoutProService;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,18 +24,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class PedidosController {
     private final PedidoService pedidos;
+    private final CheckoutProService checkoutPro;
     private final String tokenInterno;
 
-    public PedidosController(PedidoService pedidos,
+    public PedidosController(PedidoService pedidos, CheckoutProService checkoutPro,
             @Value("${balaio.internal-token:}") String tokenInterno) {
         this.pedidos = pedidos;
+        this.checkoutPro = checkoutPro;
         this.tokenInterno = tokenInterno;
     }
 
     public record Envelope(Object dados, Object erro) { }
     public record Motivo(String motivo) { }
     public record Estado(String estado) { }
-    public record Pagamento(String eventoId, String resultado) { }
     public record Decisao(UUID decisaoId, String decisao) { }
     public record Frete(String id, String nome, String prazo, BigDecimal valor) { }
 
@@ -49,12 +52,15 @@ public class PedidosController {
         UUID comprador = exigirPapel(jwt, "comprador");
         UUID id = pedidos.checkout(comando, comprador, chave);
         pedidos.processar(id);
-        return ResponseEntity.accepted().body(new Envelope(pedidos.consultar(id, comprador), null));
+        checkoutPro.preparar(id);
+        return ResponseEntity.accepted().body(new Envelope(checkoutPro.complementar(id, pedidos.consultar(id, comprador)), null));
     }
 
     @GetMapping("/api/v1/pedidos")
     public Envelope listar(@AuthenticationPrincipal Jwt jwt) {
-        return new Envelope(pedidos.listar(exigirPapel(jwt, "comprador")), null);
+        UUID comprador = exigirPapel(jwt, "comprador");
+        return new Envelope(pedidos.listar(comprador).stream()
+                .map(pedido -> checkoutPro.complementar((UUID) pedido.get("id"), pedido)).toList(), null);
     }
 
     @GetMapping("/api/v1/artesao/vendas")
@@ -69,7 +75,7 @@ public class PedidosController {
 
     @GetMapping("/api/v1/pedidos/{id}")
     public Envelope consultar(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
-        return new Envelope(pedidos.consultar(id, exigirPapel(jwt, "comprador")), null);
+        return new Envelope(checkoutPro.complementar(id, pedidos.consultar(id, exigirPapel(jwt, "comprador"))), null);
     }
 
     @PatchMapping("/api/v1/pedidos/{id}/cancelar")
@@ -77,7 +83,8 @@ public class PedidosController {
         UUID comprador = exigirPapel(jwt, "comprador");
         pedidos.encerrar(id, comprador, "cancelado", "Cancelado pelo comprador antes da produção.");
         pedidos.processar(id);
-        return resposta(pedidos.consultar(id, comprador));
+        checkoutPro.tentarOperacao(id);
+        return resposta(checkoutPro.complementar(id, pedidos.consultar(id, comprador)));
     }
 
     @PatchMapping("/api/v1/pedidos/{id}/recusar")
@@ -86,6 +93,7 @@ public class PedidosController {
         UUID artesao = exigirPapel(jwt, "artesao");
         pedidos.encerrar(id, artesao, "recusado", comando == null ? null : comando.motivo());
         pedidos.processar(id);
+        checkoutPro.tentarOperacao(id);
         return resposta(pedidos.consultarArtesao(id, artesao));
     }
 
@@ -97,21 +105,13 @@ public class PedidosController {
         return new Envelope(pedidos.producao(id, exigirPapel(jwt, "artesao")), null);
     }
 
-    @PostMapping("/internal/v1/pedidos/{id}/pagamento")
-    public Envelope pagamento(@PathVariable UUID id, @RequestBody Pagamento evento,
-            @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {
-        exigirInterno(token);
-        pedidos.pagamento(id, evento.eventoId(), evento.resultado());
-        pedidos.processar(id);
-        return new Envelope(pedidos.consultarInterno(id), null);
-    }
-
     @PostMapping("/internal/v1/pedidos/{id}/decisao-mediacao")
     public Envelope mediacao(@PathVariable UUID id, @RequestBody Decisao decisao,
             @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {
         exigirInterno(token);
         pedidos.mediacao(id, decisao.decisaoId(), decisao.decisao());
         pedidos.processar(id);
+        checkoutPro.tentarOperacao(id);
         return new Envelope(pedidos.consultarInterno(id), null);
     }
 
@@ -126,7 +126,8 @@ public class PedidosController {
     private ResponseEntity<Envelope> resposta(Map<String, Object> atual) {
         String estado = (String) atual.get("estado");
         var corpo = new Envelope(atual, null);
-        return "encerramento_pendente".equals(estado) ? ResponseEntity.accepted().body(corpo)
+        return List.of("encerramento_pendente", "cancelamento_pendente", "reembolso_pendente").contains(estado)
+                ? ResponseEntity.accepted().body(corpo)
                 : ResponseEntity.ok(corpo);
     }
 
