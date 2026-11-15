@@ -10,7 +10,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
     "spring.datasource.driver-class-name=org.h2.Driver",
     "spring.flyway.enabled=false",
     "spring.jpa.hibernate.ddl-auto=none",
-    "balaio.worker.enabled=false"
+    "balaio.worker.enabled=false",
+    "payment.mercadopago.worker-enabled=false"
 })
 class CommerceServiceApplicationTests {
 	@MockitoBean JwtDecoder decoder;
