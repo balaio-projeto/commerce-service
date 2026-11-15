@@ -41,6 +41,7 @@ public class CheckoutProService {
     }
 
     public void preparar(UUID pedidoId) {
+        if (!config.enabled()) return;
         boolean nova = Boolean.TRUE.equals(transacoes.execute(status -> {
             Integer inseridas = jdbc.update("INSERT INTO pagamento_intencoes(pedido_id, estado) "
                     + "SELECT id, 'CRIANDO' FROM pedidos WHERE id = ? AND estado = 'aguardando_pagamento' "
@@ -70,6 +71,11 @@ public class CheckoutProService {
         }
     }
 
+    public void exigirDisponivel() {
+        if (!config.enabled())
+            throw new PedidoException(503, "PAGAMENTO_INDISPONIVEL", "Pagamento sandbox não configurado.");
+    }
+
     public Map<String, Object> complementar(UUID pedidoId, Map<String, Object> pedido) {
         var dados = new LinkedHashMap<>(pedido);
         var intencao = intencao(pedidoId);
@@ -82,6 +88,7 @@ public class CheckoutProService {
     }
 
     public void receber(String assinatura, String requestId, String dataId, JsonNode aviso) {
+        exigirDisponivel();
         if (assinatura == null || assinatura.isBlank() || requestId == null || requestId.isBlank()
                 || requestId.length() > 160 || dataId == null
                 || !dataId.matches("[0-9]{1,80}")) throw new PedidoException(401, "WEBHOOK_INVALIDO", "Notificação inválida.");
@@ -176,7 +183,7 @@ public class CheckoutProService {
 
     @Scheduled(fixedDelayString = "${payment.mercadopago.worker-interval-ms:10000}")
     public void reconciliar() {
-        if (!workerAtivo) return;
+        if (!workerAtivo || !config.enabled()) return;
         processarNotificacoes();
         var reservasFalhas = jdbc.query("SELECT id FROM pedidos WHERE estado = 'aguardando_reserva' "
                 + "AND tentativas >= 10 LIMIT 30", (rs, row) -> (UUID) rs.getObject(1));

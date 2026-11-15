@@ -50,6 +50,7 @@ public class PedidosController {
     public ResponseEntity<Envelope> checkout(@RequestBody PedidoService.Checkout comando,
             @RequestHeader("Idempotency-Key") String chave, @AuthenticationPrincipal Jwt jwt) {
         UUID comprador = exigirPapel(jwt, "comprador");
+        checkoutPro.exigirDisponivel();
         UUID id = pedidos.checkout(comando, comprador, chave);
         pedidos.processar(id);
         checkoutPro.preparar(id);

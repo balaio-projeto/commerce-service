@@ -66,17 +66,17 @@ O Mercado Pago envia Webhooks com `x-signature`, `x-request-id` e identificador 
 | `api-gateway/src/test/java/br/com/balaio/api_gateway/ApiGatewayApplicationTests.java` | Adicionar verificação de encaminhamento do webhook e preservação de headers/query necessários; garantir que demais rotas commerce não mudem. |
 | `api-gateway/README.md` | Documentar encaminhamento HTTPS público do webhook e dependência de URL alcançável pelo Mercado Pago em homologação. |
 
-### 4.3 Frontend `Balaio/Frontend`
+### 4.3 Frontend `Balaio-Front/Frontend`
 
 | Arquivo existente | Alteração prevista |
 |---|---|
-| `Balaio/Frontend/src/services/api/pedidos.servico.ts` | Ajustar tipo de retorno do checkout para incluir URL sandbox; manter reuso da `Idempotency-Key` até conclusão do POST, inclusive em falha de rede/timeout ambíguo. Expor consulta/estado atualizado do pedido. |
-| `Balaio/Frontend/src/components/carrinho/CheckoutFormulario.tsx` | Remover opções e textos de pagamento simulado; retirar campos que insinuem escolha de pagamento Balaio se Checkout Pro controla meios. Ao receber URL do commerce, redirecionar ao checkout hospedado. Não limpar sacola/perder chave antes de confirmar criação do pedido. |
-| `Balaio/Frontend/src/app/confirmation/[id]/page.tsx` | Ler retorno de sucesso/pendente/falha como indicação visual apenas; obter estado autorizado do backend por consulta/polling controlado. Mostrar “aguardando confirmação” até confirmação do servidor, falha real, expiração ou pagamento aprovado. Nunca derivar status financeiro só de query string ou redirect. |
-| `Balaio/Frontend/src/app/orders/[id]/page.tsx` | Mostrar status de pagamento, cancelamento/reembolso e instruções corretas conforme estado persistido; evitar declarar reembolso concluído antes da confirmação. |
-| `Balaio/Frontend/src/types/dominio.ts` | Tipar os estados efetivamente expostos pelo commerce e metadados não sensíveis da intenção (status e URL apenas quando necessária); não incluir token do provedor, segredo ou dados de cartão. |
-| `Balaio/Frontend/src/proxy.ts` | Conferir que rotas API públicas autenticadas seguem fluxo existente e webhook não passa pelo proxy de sessão do navegador; alterar somente se o proxy tratar paths do Gateway de modo incompatível. |
-| `Balaio/Frontend/docs/api.md` e `Balaio/Frontend/docs/arquitetura.md` | Atualizar contrato de checkout, redirects, fonte de verdade do status e ausência de cartão/dados financeiros sensíveis no frontend, se esses docs descrevem checkout atual. |
+| `Balaio-Front/Frontend/src/services/api/pedidos.servico.ts` | Ajustar tipo de retorno do checkout para incluir URL sandbox; manter reuso da `Idempotency-Key` até conclusão do POST, inclusive em falha de rede/timeout ambíguo. Expor consulta/estado atualizado do pedido. |
+| `Balaio-Front/Frontend/src/components/carrinho/CheckoutFormulario.tsx` | Remover opções e textos de pagamento simulado; retirar campos que insinuem escolha de pagamento Balaio se Checkout Pro controla meios. Ao receber URL do commerce, redirecionar ao checkout hospedado. Não limpar sacola/perder chave antes de confirmar criação do pedido. |
+| `Balaio-Front/Frontend/src/app/confirmation/[id]/page.tsx` | Ler retorno de sucesso/pendente/falha como indicação visual apenas; obter estado autorizado do backend por consulta/polling controlado. Mostrar “aguardando confirmação” até confirmação do servidor, falha real, expiração ou pagamento aprovado. Nunca derivar status financeiro só de query string ou redirect. |
+| `Balaio-Front/Frontend/src/app/orders/[id]/page.tsx` | Mostrar status de pagamento, cancelamento/reembolso e instruções corretas conforme estado persistido; evitar declarar reembolso concluído antes da confirmação. |
+| `Balaio-Front/Frontend/src/types/dominio.ts` | Tipar os estados efetivamente expostos pelo commerce e metadados não sensíveis da intenção (status e URL apenas quando necessária); não incluir token do provedor, segredo ou dados de cartão. |
+| `Balaio-Front/Frontend/src/proxy.ts` | Conferir que rotas API públicas autenticadas seguem fluxo existente e webhook não passa pelo proxy de sessão do navegador; alterar somente se o proxy tratar paths do Gateway de modo incompatível. |
+| `Balaio-Front/Frontend/docs/api.md` e `Balaio-Front/Frontend/docs/arquitetura.md` | Atualizar contrato de checkout, redirects, fonte de verdade do status e ausência de cartão/dados financeiros sensíveis no frontend, se esses docs descrevem checkout atual. |
 
 ### 4.4 `platform` e catálogo — apenas integração/contrato PI-190
 
@@ -105,7 +105,7 @@ Nomes abaixo seguem a estrutura atual e podem ser ajustados ao padrão já exist
 
 ### Frontend
 
-- Se polling ficar complexo para a rota existente, novo componente `Balaio/Frontend/src/components/pedidos/EstadoPagamento.tsx` para consultar pedido, representar pendente/aprovado/recusado/expirado/reembolsado e limitar frequência; não precisa novo endpoint se `GET /api/v1/pedidos/{id}` entregar estado atualizado.
+- Se polling ficar complexo para a rota existente, novo componente `Balaio-Front/Frontend/src/components/pedidos/EstadoPagamento.tsx` para consultar pedido, representar pendente/aprovado/recusado/expirado/reembolsado e limitar frequência; não precisa novo endpoint se `GET /api/v1/pedidos/{id}` entregar estado atualizado.
 
 ## 6. Rotas/contratos a implementar ou ajustar
 

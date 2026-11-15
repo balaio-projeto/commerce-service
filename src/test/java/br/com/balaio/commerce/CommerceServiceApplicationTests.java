@@ -11,12 +11,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
     "spring.flyway.enabled=false",
     "spring.jpa.hibernate.ddl-auto=none",
     "balaio.worker.enabled=false",
-    "payment.mercadopago.worker-enabled=false",
-    "payment.mercadopago.environment=sandbox",
-    "payment.mercadopago.access-token=APP_USR-test-placeholder",
-    "payment.mercadopago.webhook-secret=webhook-test-placeholder",
-    "payment.mercadopago.notification-url=https://test.example/webhook",
-    "payment.mercadopago.frontend-return-url=https://test.example"
+    "payment.mercadopago.worker-enabled=false"
 })
 class CommerceServiceApplicationTests {
 	@MockitoBean JwtDecoder decoder;

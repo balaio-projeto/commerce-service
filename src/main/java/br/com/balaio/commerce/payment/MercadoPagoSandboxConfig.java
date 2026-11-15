@@ -12,6 +12,7 @@ public class MercadoPagoSandboxConfig {
     private final String notificationUrl;
     private final String frontendReturnUrl;
     private final String baseUrl;
+    private final boolean enabled;
 
     public MercadoPagoSandboxConfig(
             @Value("${payment.mercadopago.environment:}") String environment,
@@ -20,16 +21,22 @@ public class MercadoPagoSandboxConfig {
             @Value("${payment.mercadopago.webhook-secret:}") String webhookSecret,
             @Value("${payment.mercadopago.notification-url:}") String notificationUrl,
             @Value("${payment.mercadopago.frontend-return-url:}") String frontendReturnUrl) {
-        if (!"sandbox".equals(environment) || !"https://api.mercadopago.com".equals(baseUrl)
+        boolean absent = (environment == null || environment.isBlank())
+                && (accessToken == null || accessToken.isBlank())
+                && (webhookSecret == null || webhookSecret.isBlank())
+                && (notificationUrl == null || notificationUrl.isBlank())
+                && (frontendReturnUrl == null || frontendReturnUrl.isBlank());
+        if (!absent && (!"sandbox".equals(environment) || !"https://api.mercadopago.com".equals(baseUrl)
                 || accessToken == null || !accessToken.startsWith("APP_USR-")
                 || webhookSecret == null || webhookSecret.isBlank()
-                || !publicHttps(notificationUrl) || !publicHttps(frontendReturnUrl))
+                || !publicHttps(notificationUrl) || !publicHttps(frontendReturnUrl)))
             throw new IllegalStateException("Configuração sandbox do Mercado Pago incompleta ou insegura.");
+        this.enabled = !absent;
         this.baseUrl = baseUrl;
         this.accessToken = accessToken;
         this.webhookSecret = webhookSecret;
         this.notificationUrl = notificationUrl;
-        this.frontendReturnUrl = frontendReturnUrl.replaceAll("/+$", "");
+        this.frontendReturnUrl = frontendReturnUrl == null ? "" : frontendReturnUrl.replaceAll("/+$", "");
     }
 
     private boolean publicHttps(String value) {
@@ -47,4 +54,5 @@ public class MercadoPagoSandboxConfig {
     public String webhookSecret() { return webhookSecret; }
     public String notificationUrl() { return notificationUrl; }
     public String returnUrl() { return frontendReturnUrl; }
+    public boolean enabled() { return enabled; }
 }
