@@ -185,16 +185,31 @@ public class CheckoutProService {
     public void reconciliar() {
         if (!workerAtivo || !config.enabled()) return;
         processarNotificacoes();
+        encerrarReservasFalhas();
+        recuperarIntencoesPendentes();
+        atualizarPagamentosPendentes();
+        encerrarPagamentosExpirados();
+        reembolsarConfirmacoesFalhas();
+        processarOperacoesPendentes();
+    }
+
+    private void encerrarReservasFalhas() {
         var reservasFalhas = jdbc.query("SELECT id FROM pedidos WHERE estado = 'aguardando_reserva' "
                 + "AND tentativas >= 10 LIMIT 30", (rs, row) -> (UUID) rs.getObject(1));
         for (UUID id : reservasFalhas) {
             if (mudarSe(id, "aguardando_reserva", "encerramento_pendente", "falha_reserva"))
                 pedidos.processar(id);
         }
+    }
+
+    private void recuperarIntencoesPendentes() {
         var pendentes = jdbc.query("SELECT pedido_id FROM pagamento_intencoes WHERE estado = 'CRIANDO' "
                 + "AND atualizado_em < now() - interval '10 seconds' LIMIT 30",
                 (rs, row) -> (UUID) rs.getObject(1));
         for (UUID id : pendentes) preparar(id);
+    }
+
+    private void atualizarPagamentosPendentes() {
         var pagamentos = jdbc.query("SELECT p.id, i.pagamento_id FROM pedidos p JOIN pagamento_intencoes i "
                 + "ON i.pedido_id = p.id WHERE i.pagamento_id IS NOT NULL "
                 + "AND p.estado IN ('aguardando_pagamento', 'confirmacao_pendente', 'cancelamento_pendente', 'reembolso_pendente') "
@@ -204,6 +219,9 @@ public class CheckoutProService {
             try { aplicarPagamento(pagamento.getValue()); }
             catch (RuntimeException falha) { registrarErro(pagamento.getKey(), falha); }
         }
+    }
+
+    private void encerrarPagamentosExpirados() {
         var expirados = jdbc.query("SELECT p.id FROM pedidos p JOIN pagamento_intencoes i ON i.pedido_id = p.id "
                 + "WHERE p.estado = 'aguardando_pagamento' AND i.criado_em < now() - interval '16 minutes' LIMIT 30",
                 (rs, row) -> (UUID) rs.getObject(1));
@@ -219,11 +237,17 @@ public class CheckoutProService {
                 }
             } catch (RuntimeException falha) { registrarErro(id, falha); }
         }
+    }
+
+    private void reembolsarConfirmacoesFalhas() {
         var confirmacoesFalhas = jdbc.query("SELECT id FROM pedidos WHERE estado = 'confirmacao_pendente' "
                 + "AND tentativas >= 10 LIMIT 30", (rs, row) -> (UUID) rs.getObject(1));
         for (UUID id : confirmacoesFalhas) {
             mudarSe(id, "confirmacao_pendente", "reembolso_pendente", "reembolsado");
         }
+    }
+
+    private void processarOperacoesPendentes() {
         var operacoes = jdbc.query("SELECT id FROM pedidos WHERE estado IN ('cancelamento_pendente', 'reembolso_pendente') "
                 + "LIMIT 30", (rs, row) -> (UUID) rs.getObject(1));
         for (UUID id : operacoes) {
