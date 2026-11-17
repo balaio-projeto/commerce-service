@@ -33,9 +33,10 @@ public class CatalogoCliente {
     public Cotacao cotar(String slug) {
         JsonNode dados = dados(http.get().uri("/internal/v1/pecas/{slug}/cotacao", slug)
                 .header("X-Balaio-Service-Token", segredo()).retrieve().body(JsonNode.class));
+        String proprietario = dados.path("proprietarioId").asText();
         return new Cotacao(dados.path("slug").asText(), new BigDecimal(dados.path("preco").asText()),
                 dados.path("disponibilidade").asText(), dados.path("artesao").asText(),
-                UUID.fromString(dados.path("proprietarioId").asText()));
+                proprietario.isBlank() ? null : UUID.fromString(proprietario));
     }
 
     public Reserva reservar(UUID pedido, String slug) {
