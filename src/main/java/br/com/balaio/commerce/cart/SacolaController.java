@@ -7,6 +7,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -24,6 +25,11 @@ public class SacolaController {
     @GetMapping("/api/v1/estado/sacola")
     public Envelope consultar(@AuthenticationPrincipal Jwt jwt) {
         return new Envelope(sacola.consultar(comprador(jwt)), null);
+    }
+
+    @PostMapping("/api/v1/sacola/revalidar")
+    public Envelope revalidar(@AuthenticationPrincipal Jwt jwt) {
+        return new Envelope(sacola.revalidar(comprador(jwt)), null);
     }
 
     @PutMapping("/api/v1/estado/sacola")
