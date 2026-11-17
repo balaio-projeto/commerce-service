@@ -106,6 +106,13 @@ public class PedidosController {
         return new Envelope(pedidos.producao(id, exigirPapel(jwt, "artesao")), null);
     }
 
+    @GetMapping("/internal/v1/pedidos/{id}")
+    public Envelope consultarInterno(@PathVariable UUID id,
+            @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {
+        exigirInterno(token);
+        return new Envelope(pedidos.consultarInterno(id), null);
+    }
+
     @PostMapping("/internal/v1/pedidos/{id}/decisao-mediacao")
     public Envelope mediacao(@PathVariable UUID id, @RequestBody Decisao decisao,
             @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {

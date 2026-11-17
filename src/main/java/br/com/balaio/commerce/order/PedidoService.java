@@ -340,6 +340,7 @@ public class PedidoService {
         var itens = itens(pedido.id());
         dados.put("id", pedido.id());
         dados.put("compradorId", pedido.comprador());
+        dados.put("artesaoId", pedido.artesao());
         dados.put("pecaSlug", itens.getFirst().slug());
         dados.put("compradorNome", "Comprador");
         dados.put("data", pedido.criadoEm().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
