@@ -9,7 +9,9 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -30,6 +32,16 @@ public class PedidoService {
     private static final java.util.Set<String> UFS = java.util.Set.of("AC", "AL", "AP", "AM", "BA", "CE",
             "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
             "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO");
+    private static final int TAMANHO_MAXIMO_CHAVE = 160;
+    private static final int MAXIMO_ITENS = 20;
+    private static final int QUANTIDADE_MINIMA = 1;
+    private static final int QUANTIDADE_MAXIMA = 3;
+    private static final String FRETE_ID = "padrao";
+    private static final String MEIO_PAGAMENTO = "checkout_pro";
+    private static final List<String> CAMPOS_ENDERECO = List.of("cep", "endereco", "cidade", "estado");
+    private static final Pattern CEP = Pattern.compile("[0-9]{5}-?[0-9]{3}");
+    private static final int TAMANHO_MAXIMO_ENDERECO = 200;
+    private static final int TAMANHO_MAXIMO_CIDADE = 100;
     private final JdbcTemplate jdbc;
     private final CatalogoCliente catalogo;
     private final TransactionTemplate transacoes;
@@ -49,50 +61,92 @@ public class PedidoService {
     public record Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco) { }
 
     public UUID checkout(Checkout comando, UUID comprador, String chave) {
-        if (comprador == null || vazio(chave) || chave.length() > 160)
-            throw erro(400, "REQUISICAO_INVALIDA", "Informe a chave idempotente do checkout.");
+        validarChave(comprador, chave);
         String fingerprint = fingerprint(comando);
         UUID existente = transacoes.execute(status -> buscarCheckoutExistente(comprador, chave, fingerprint));
         if (existente != null) return existente;
-        if (comando == null || comando.itens() == null || comando.itens().isEmpty() || comando.itens().size() > 20
-                || !"padrao".equals(comando.freteId())
-                || !"checkout_pro".equals(comando.meio())
-                || comando.endereco() == null || List.of("cep", "endereco", "cidade", "estado").stream()
-                        .anyMatch(campo -> vazio(comando.endereco().get(campo)))
-                || !comando.endereco().get("cep").matches("[0-9]{5}-?[0-9]{3}")
-                || !UFS.contains(comando.endereco().get("estado"))
-                || comando.endereco().get("endereco").length() > 200
-                || comando.endereco().get("cidade").length() > 100)
-            throw erro(400, "REQUISICAO_INVALIDA", "Confira os itens, endereço, frete e pagamento.");
+        validarComando(comando);
+        ItensCotados cotacao = cotarItens(comando.itens());
+        return persistir(comando, comprador, chave, fingerprint, cotacao);
+    }
+
+    private void validarChave(UUID comprador, String chave) {
+        if (comprador == null || vazio(chave) || chave.length() > TAMANHO_MAXIMO_CHAVE)
+            throw erro(400, "REQUISICAO_INVALIDA", "Informe a chave idempotente do checkout.");
+    }
+
+    private void validarComando(Checkout comando) {
+        if (comando == null) throw comandoInvalido();
+        validarQuantidadeDeItens(comando.itens());
+        if (!FRETE_ID.equals(comando.freteId())) throw comandoInvalido();
+        if (!MEIO_PAGAMENTO.equals(comando.meio())) throw comandoInvalido();
+        validarEndereco(comando.endereco());
+    }
+
+    private void validarQuantidadeDeItens(List<Item> itens) {
+        if (itens == null || itens.isEmpty() || itens.size() > MAXIMO_ITENS) throw comandoInvalido();
+    }
+
+    private void validarEndereco(Map<String, String> endereco) {
+        if (endereco == null) throw comandoInvalido();
+        if (CAMPOS_ENDERECO.stream().anyMatch(campo -> vazio(endereco.get(campo)))) throw comandoInvalido();
+        if (!CEP.matcher(endereco.get("cep")).matches()) throw comandoInvalido();
+        if (!UFS.contains(endereco.get("estado"))) throw comandoInvalido();
+        if (endereco.get("endereco").length() > TAMANHO_MAXIMO_ENDERECO) throw comandoInvalido();
+        if (endereco.get("cidade").length() > TAMANHO_MAXIMO_CIDADE) throw comandoInvalido();
+    }
+
+    private PedidoException comandoInvalido() {
+        return erro(400, "REQUISICAO_INVALIDA", "Confira os itens, endereço, frete e pagamento.");
+    }
+
+    private ItensCotados cotarItens(List<Item> itens) {
         var slugs = new HashSet<String>();
         var cotados = new ArrayList<ItemCotado>();
         UUID artesao = null;
         BigDecimal total = FRETE_PADRAO;
-        for (var item : comando.itens()) {
-            if (item == null || vazio(item.slug()) || item.quantidade() == null
-                    || item.quantidade() < 1 || item.quantidade() > 3 || !slugs.add(item.slug()))
-                throw erro(400, "REQUISICAO_INVALIDA", "Item inválido ou duplicado.");
+        for (var item : itens) {
+            validarItem(item, slugs);
             var cotacao = catalogo.cotar(item.slug());
-            if (cotacao.proprietarioId() == null || (artesao != null && !artesao.equals(cotacao.proprietarioId()))
-                    || ("unica".equals(cotacao.disponibilidade()) && item.quantidade() != 1))
-                throw erro(409, "PEDIDO_CONFLITANTE", "Finalize separadamente as peças de cada ateliê.");
+            validarCotacao(cotacao, artesao, item.quantidade());
             artesao = cotacao.proprietarioId();
             cotados.add(new ItemCotado(item.slug(), item.quantidade(), cotacao.preco(), cotacao.disponibilidade()));
             total = total.add(cotacao.preco().multiply(BigDecimal.valueOf(item.quantidade())));
         }
-        UUID artesaoFinal = artesao;
-        BigDecimal totalFinal = total;
+        return new ItensCotados(artesao, total, cotados);
+    }
+
+    private void validarItem(Item item, Set<String> slugsJaVistos) {
+        if (item == null || vazio(item.slug())) throw itemInvalido();
+        if (item.quantidade() == null || item.quantidade() < QUANTIDADE_MINIMA
+                || item.quantidade() > QUANTIDADE_MAXIMA) throw itemInvalido();
+        if (!slugsJaVistos.add(item.slug())) throw itemInvalido();
+    }
+
+    private PedidoException itemInvalido() {
+        return erro(400, "REQUISICAO_INVALIDA", "Item inválido ou duplicado.");
+    }
+
+    private void validarCotacao(CatalogoCliente.Cotacao cotacao, UUID artesaoDoPedido, int quantidade) {
+        boolean semAtelie = cotacao.proprietarioId() == null;
+        boolean deOutroAtelie = artesaoDoPedido != null && !artesaoDoPedido.equals(cotacao.proprietarioId());
+        boolean pecaUnicaComMaisDeUma = "unica".equals(cotacao.disponibilidade()) && quantidade != 1;
+        if (semAtelie || deOutroAtelie || pecaUnicaComMaisDeUma)
+            throw erro(409, "PEDIDO_CONFLITANTE", "Finalize separadamente as peças de cada ateliê.");
+    }
+
+    private UUID persistir(Checkout comando, UUID comprador, String chave, String fingerprint, ItensCotados cotacao) {
         return transacoes.execute(status -> {
             UUID jaCriado = buscarCheckoutExistente(comprador, chave, fingerprint);
             if (jaCriado != null) return jaCriado;
             UUID id = UUID.randomUUID();
             try {
                 jdbc.update("INSERT INTO pedidos(id, comprador_id, artesao_id, estado, chave_checkout, fingerprint_checkout, endereco, frete_id, frete, total, meio) VALUES (?, ?, ?, 'aguardando_reserva', ?, ?, CAST(? AS jsonb), 'padrao', ?, ?, ?)",
-                        id, comprador, artesaoFinal, chave, fingerprint, json.writeValueAsString(comando.endereco()), FRETE_PADRAO, totalFinal, comando.meio());
+                        id, comprador, cotacao.artesao(), chave, fingerprint, json.writeValueAsString(comando.endereco()), FRETE_PADRAO, cotacao.total(), comando.meio());
             } catch (JacksonException exception) {
                 throw erro(400, "REQUISICAO_INVALIDA", "Endereço inválido.");
             }
-            for (var item : cotados)
+            for (var item : cotacao.itens())
                 jdbc.update("INSERT INTO pedido_itens(pedido_id, slug, quantidade, preco, disponibilidade) VALUES (?, ?, ?, ?, ?)",
                         id, item.slug(), item.quantidade(), item.preco(), item.disponibilidade());
             return id;
@@ -370,6 +424,7 @@ public class PedidoService {
         return new PedidoException(status, codigo, mensagem);
     }
     private record ItemCotado(String slug, int quantidade, BigDecimal preco, String disponibilidade) { }
+    private record ItensCotados(UUID artesao, BigDecimal total, List<ItemCotado> itens) { }
     private record ItemLinha(String slug, int quantidade, BigDecimal preco, String disponibilidade,
                              UUID reservaId, String reservaEstado) { }
     private record Pedido(UUID id, UUID comprador, UUID artesao, String estado, String encerramento,
