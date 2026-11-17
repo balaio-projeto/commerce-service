@@ -79,7 +79,7 @@ public class JwtCommerceSecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/pagamentos/mercado-pago/notificacoes").permitAll()
-                        .requestMatchers("/api/v1/checkout", "/api/v1/pedidos/**", "/api/v1/estado/sacola",
+                        .requestMatchers("/api/v1/checkout", "/api/v1/pedidos/**", "/api/v1/estado/sacola", "/api/v1/sacola/revalidar",
                                 "/api/v1/artesao/pedidos-pendentes", "/api/v1/artesao/vendas").authenticated()
                         .anyRequest().permitAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> {})
