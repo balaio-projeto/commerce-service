@@ -17,6 +17,10 @@ No Windows: `.\mvnw.cmd spring-boot:run`. Testes: `.\mvnw.cmd test`.
 
 O `Dockerfile` constrói uma imagem própria. Em `platform`, use `docker compose up --build -d commerce-service` para iniciar este serviço e seu banco ou `docker compose --profile extended up --build -d` para iniciar todos. Health: `http://localhost:8083/actuator/health`.
 
+## PI-187: sacola do comprador
+
+`GET /api/v1/estado/sacola` devolve `{dados:[{slug,quantidade}],erro:null}` para o comprador autenticado; sem itens, `dados` é `[]`. `PUT /api/v1/estado/sacola` recebe `{sacola:[{slug,quantidade}]}` e substitui atomicamente as linhas da conta do `sub` no JWT. Não aceita identidade nem preço no corpo. Quantidades válidas são 1 a 3, e peça única aceita somente 1. O commerce valida slug, preço atual e disponibilidade pela cotação HTTP interna do catálogo. A sacola não cria reserva nem congela preço; o checkout faz nova cotação antes de reservar.
+
 ## PI-54: Checkout Pro em sandbox
 
 `POST /api/v1/checkout` exige JWT de comprador e `Idempotency-Key`. Aceita `itens: [{slug, quantidade}]`, `freteId: "padrao"`, `meio: "checkout_pro"` e `endereco` com `cep`, `endereco`, `cidade` e `estado`. A resposta 202 mantém `{dados,erro}` e inclui `checkoutUrl` apenas quando a preferência está pronta. O preço dos itens, o frete demonstrativo de R$ 38,90 e o total são calculados no commerce; o catálogo fornece a cotação e reserva peças únicas por API interna. Encomendas não usam reserva exclusiva.
