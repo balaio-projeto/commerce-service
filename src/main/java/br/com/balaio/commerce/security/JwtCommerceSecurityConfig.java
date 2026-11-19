@@ -16,10 +16,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
-import org.springframework.security.oauth2.core.OAuth2Error;
-import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
@@ -37,7 +34,10 @@ public class JwtCommerceSecurityConfig {
             if (!recurso.exists() || recurso.contentLength() > 16384) {
                 throw new IllegalArgumentException();
             }
-            String pem = new String(recurso.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).strip();
+            String pem;
+            try (var input = recurso.getInputStream()) {
+                pem = new String(input.readAllBytes(), StandardCharsets.US_ASCII).strip();
+            }
             String inicio = "-----BEGIN PUBLIC KEY-----";
             String fim = "-----END PUBLIC KEY-----";
             if (!pem.startsWith(inicio) || !pem.endsWith(fim)) {
@@ -50,23 +50,7 @@ public class JwtCommerceSecurityConfig {
                 throw new IllegalArgumentException();
             }
             var decoder = NimbusJwtDecoder.withPublicKey(chave).signatureAlgorithm(SignatureAlgorithm.RS256).build();
-            var padrao = JwtValidators.createDefaultWithIssuer(emissor);
-            decoder.setJwtValidator(jwt -> {
-                var resultado = padrao.validate(jwt);
-                if (resultado.hasErrors()) return resultado;
-                if (!jwt.getAudience().contains(audiencia) || jwt.getSubject() == null
-                        || jwt.getId() == null || jwt.getIssuedAt() == null || jwt.getExpiresAt() == null) {
-                    return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
-                }
-                try {
-                    if (!java.util.UUID.fromString(jwt.getSubject()).toString().equals(jwt.getSubject())) {
-                        return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
-                    }
-                } catch (IllegalArgumentException exception) {
-                    return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
-                }
-                return OAuth2TokenValidatorResult.success();
-            });
+            decoder.setJwtValidator(new ValidadorClaimsJwt(emissor, audiencia, java.time.Clock.systemUTC()));
             return decoder;
         } catch (Exception exception) {
             throw new IllegalStateException("Chave pública JWT do commerce inválida.", exception);

@@ -46,3 +46,30 @@ Para ativar o pagamento sandbox, defina `MERCADOPAGO_ENVIRONMENT=sandbox`, `MERC
 Contratos conferidos na [Preferences API](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/create-preference/post), [webhooks](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/additional-content/notifications/webhooks), [consulta de pagamento](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/get-payment/get), [pedido comercial](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/merchant-orders/get-merchant-order/get) e [reembolsos/cancelamentos](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/additional-settings/refunds-and-cancellations).
 
 Para testar com PostgreSQL 18 via Testcontainers: `$env:COMMERCE_POSTGRES_TEST='true'; .\mvnw.cmd '-Djava.version=21' clean verify`.
+
+
+## PI-169 — Validacao local do contrato JWT
+
+O decoder de producao valida RS256 e o JSON assinado independentemente do
+Gateway: sub UUID canonico, papel conhecido, iss/aud configurados, iat/exp
+inteiros, jti textual nao vazio e duracao positiva de ate 3600 segundos.
+Expiracao e estrita; iat admite ate 30 segundos no futuro; nbf e respeitado.
+Campos duplicados, algoritmos alternativos e cabecalhos que fornecem chaves
+sao recusados. A chave publica e lida com fechamento do stream. Somente o
+Profile possui a chave privada. Nao ha refresh ou revogacao imediata.
+
+A autorizacao de papel e propriedade existente permanece nos controllers e
+casos de uso. Nao foi adicionado hasRole nem acesso ao banco de outro servico.
+Token ausente/invalido em rota protegida produz 401 NAO_AUTENTICADO; identidade
+valida sem permissao produz 403 SEM_PERMISSAO, salvo ocultacao documentada por
+404. Headers X-User/X-Role nao autenticam. APIs internas preservam seu token
+proprio, sem exposicao pelo Gateway.
+
+JwtContractTest gera RSA 3072 em memoria e exercita o decoder real; JwtHttpTest
+inicia HTTP em porta aleatoria com a cadeia/decoder de producao e uma rota
+probe somente de teste (sem banco). Os testes de negocio existentes continuam
+responsaveis por papel e propriedade. Os testes probe nao sao endpoints da
+aplicacao e nao substituem validacao integrada ou testes de persistencia.
+
+Fontes: PI-169, PI-168, PI-249 e PI-261 no Jira. Organizador permanece reservado
+ao PI-210. Configuracoes de chave publica, issuer e audience nao mudaram.
