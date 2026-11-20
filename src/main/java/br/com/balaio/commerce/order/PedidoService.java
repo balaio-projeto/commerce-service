@@ -200,13 +200,14 @@ public class PedidoService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listarPendentesArtesao(UUID artesao) {
-        return jdbc.query("SELECT id FROM pedidos WHERE artesao_id = ? AND estado = 'confirmado' ORDER BY criado_em DESC",
-                (rs, row) -> (UUID) rs.getObject(1), artesao).stream().map(id -> {
-                    var pedido = obter(id, false);
-                    return Map.<String, Object>of("id", id, "pecaSlug", itens(id).getFirst().slug(),
-                            "comprador", "Comprador", "quando", pedido.criadoEm().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
-                            "valor", pedido.total());
-                }).toList();
+        return jdbc.query("SELECT p.id, p.criado_em, p.total, "
+                        + "(SELECT i.slug FROM pedido_itens i WHERE i.pedido_id = p.id ORDER BY i.slug LIMIT 1) AS peca_slug "
+                        + "FROM pedidos p WHERE p.artesao_id = ? AND p.estado = 'confirmado' ORDER BY p.criado_em DESC",
+                (rs, row) -> Map.<String, Object>of("id", (UUID) rs.getObject("id"),
+                        "pecaSlug", rs.getString("peca_slug"), "comprador", "Comprador",
+                        "quando", rs.getObject("criado_em", OffsetDateTime.class)
+                                .format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+                        "valor", rs.getBigDecimal("total")), artesao);
     }
 
     @Transactional
@@ -242,10 +243,9 @@ public class PedidoService {
     public Map<String, Object> producao(UUID id, UUID artesao) {
         var pedido = obter(id, true);
         if (!pedido.artesao().equals(artesao)) throw erro(403, "SEM_PERMISSAO", "Este pedido pertence a outro ateliê.");
-        if (!"confirmado".equals(pedido.estado()) && !"producao".equals(pedido.estado()))
+        if (!"confirmado".equals(pedido.estado()))
             throw erro(409, "PEDIDO_CONFLITANTE", "Transição de pedido inválida.");
-        if ("confirmado".equals(pedido.estado()))
-            jdbc.update("UPDATE pedidos SET estado = 'producao', atualizado_em = now() WHERE id = ?", id);
+        jdbc.update("UPDATE pedidos SET estado = 'producao', atualizado_em = now() WHERE id = ?", id);
         return resposta(obter(id, false));
     }
 

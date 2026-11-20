@@ -101,9 +101,10 @@ public class PedidosController {
     @PatchMapping("/api/v1/pedidos/{id}/estado")
     public Envelope estado(@PathVariable UUID id, @RequestBody Estado comando,
             @AuthenticationPrincipal Jwt jwt) {
+        UUID artesao = exigirPapel(jwt, "artesao");
         if (comando == null || !"producao".equals(comando.estado()))
             throw new PedidoException(400, "REQUISICAO_INVALIDA", "Estado inválido.");
-        return new Envelope(pedidos.producao(id, exigirPapel(jwt, "artesao")), null);
+        return new Envelope(pedidos.producao(id, artesao), null);
     }
 
     @GetMapping("/internal/v1/pedidos/{id}")

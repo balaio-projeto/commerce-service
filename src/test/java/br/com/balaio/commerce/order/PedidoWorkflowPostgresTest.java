@@ -53,6 +53,7 @@ class PedidoWorkflowPostgresTest {
     }
 
     @Autowired PedidoService pedidos;
+    @Autowired PedidosController controller;
     @Autowired JdbcTemplate jdbc;
     @MockitoBean CatalogoCliente catalogo;
     @MockitoBean CheckoutProClient provedor;
@@ -86,6 +87,42 @@ class PedidoWorkflowPostgresTest {
                 id.toString(), total, "BRL", estado, false, "ordem-" + id, BigDecimal.ZERO));
         when(provedor.ordem("ordem-" + id)).thenReturn(new CheckoutProClient.Ordem(
                 "pref-" + id, id.toString()));
+    }
+
+    @Test
+    void artesaoSoAtualizaPedidoProprioConfirmadoECompradorVeEstadoPersistido() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID outroArtesao = UUID.randomUUID();
+        String slug = "gestao-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("75.00"), "encomenda", "atelie", artesao));
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, "gestao-" + slug);
+        assertThat(pedidos.listarPendentesArtesao(artesao)).isEmpty();
+        assertThatThrownBy(() -> pedidos.producao(id, artesao)).isInstanceOf(PedidoException.class);
+        preparar(id);
+        aprovar(id, "pagamento-" + slug);
+        assertThat(pedidos.listarPendentesArtesao(artesao)).extracting(p -> p.get("id")).containsExactly(id);
+        assertThat(pedidos.listarPendentesArtesao(outroArtesao)).isEmpty();
+        assertThatThrownBy(() -> pedidos.producao(id, outroArtesao)).isInstanceOf(PedidoException.class);
+        var jwtComprador = jwt(comprador, "comprador");
+        var jwtArtesao = jwt(artesao, "artesao");
+        assertThatThrownBy(() -> controller.estado(id, new PedidosController.Estado("producao"), jwtComprador))
+                .isInstanceOf(PedidoException.class);
+        assertThatThrownBy(() -> controller.estado(id, new PedidosController.Estado("enviado"), jwtArtesao))
+                .isInstanceOf(PedidoException.class);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("confirmado");
+        assertThat(((Map<?, ?>) controller.estado(id, new PedidosController.Estado("producao"), jwtArtesao)
+                .dados()).get("estado")).isEqualTo("producao");
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("producao");
+        assertThat(pedidos.listarPendentesArtesao(artesao)).isEmpty();
+        assertThatThrownBy(() -> pedidos.producao(id, artesao)).isInstanceOf(PedidoException.class);
+    }
+
+    private org.springframework.security.oauth2.jwt.Jwt jwt(UUID id, String papel) {
+        return org.springframework.security.oauth2.jwt.Jwt.withTokenValue("teste")
+                .header("alg", "none").subject(id.toString()).claim("papel", papel).build();
     }
 
     @Test
