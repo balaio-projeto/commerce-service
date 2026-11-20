@@ -4,6 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -14,6 +19,7 @@ import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -22,6 +28,23 @@ class PedidoServiceValidacaoCheckoutTest {
     private final CatalogoCliente catalogo = mock(CatalogoCliente.class);
     private final PedidoService service = new PedidoService(mock(JdbcTemplate.class), catalogo,
             mock(TransactionTemplate.class), JsonMapper.builder().build(), false);
+
+    @Test
+    void pendentesSaoFiltradosEProjetadosNaMesmaConsulta() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        UUID artesao = UUID.randomUUID();
+        when(jdbc.query(anyString(), any(RowMapper.class), eq(artesao))).thenAnswer(chamada -> {
+            String sql = chamada.getArgument(0);
+            assertThat(sql).contains("p.artesao_id = ?", "p.estado = 'confirmado'", "p.criado_em",
+                    "p.total", "pedido_itens i", "i.slug");
+            return List.of();
+        });
+        var pedidos = new PedidoService(jdbc, catalogo, mock(TransactionTemplate.class),
+                JsonMapper.builder().build(), false);
+        assertThat(pedidos.listarPendentesArtesao(artesao)).isEmpty();
+        verify(jdbc).query(anyString(), any(RowMapper.class), eq(artesao));
+        verifyNoMoreInteractions(jdbc);
+    }
 
     private Map<String, String> enderecoValido() {
         var endereco = new HashMap<String, String>();
