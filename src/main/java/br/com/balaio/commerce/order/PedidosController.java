@@ -114,6 +114,13 @@ public class PedidosController {
         return new Envelope(pedidos.consultarInterno(id), null);
     }
 
+    @GetMapping("/internal/v1/pedidos/{id}/participantes")
+    public Envelope participantes(@PathVariable UUID id,
+            @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {
+        exigirInterno(token);
+        return new Envelope(pedidos.participantes(id), null);
+    }
+
     @PostMapping("/internal/v1/pedidos/{id}/decisao-mediacao")
     public Envelope mediacao(@PathVariable UUID id, @RequestBody Decisao decisao,
             @RequestHeader(value = "X-Balaio-Service-Token", required = false) String token) {

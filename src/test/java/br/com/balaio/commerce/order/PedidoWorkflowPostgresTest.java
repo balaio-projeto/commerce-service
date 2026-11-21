@@ -61,6 +61,35 @@ class PedidoWorkflowPostgresTest {
     @Autowired CheckoutProService pagamentos;
     @Autowired ObjectMapper json;
 
+    @Test
+    void pedidoAnteriorAMigracaoMantemIndicadorAposNovaEtapa() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        String slug = "legado-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(
+                slug, new BigDecimal("40.00"), "encomenda", "atelie", artesao));
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of("cep", "52021030", "endereco", "Rua", "cidade", "Recife",
+                        "estado", "PE")), comprador, slug);
+        assertThat(jdbc.queryForObject("SELECT historico_incompleto FROM pedidos WHERE id = ?", Boolean.class, id))
+                .isFalse();
+        jdbc.update("UPDATE pedidos SET estado = 'confirmado' WHERE id = ?", id);
+        jdbc.update("DELETE FROM pedido_etapas WHERE pedido_id = ?", id);
+        jdbc.update("UPDATE pedidos SET historico_incompleto = true WHERE id = ?", id);
+        var detalhe = pedidos.consultar(id, comprador);
+        assertThat(detalhe.get("historicoInferido")).isEqualTo(true);
+        var etapas = (List<?>) detalhe.get("etapas");
+        assertThat(etapas).hasSize(1);
+        assertThat(((Map<?, ?>) etapas.getFirst()).get("estado")).isEqualTo("confirmado");
+        assertThat(((Map<?, ?>) etapas.getFirst()).containsKey("criadaEm")).isFalse();
+        jdbc.update("UPDATE pedidos SET estado = 'producao' WHERE id = ?", id);
+        var depois = pedidos.consultar(id, comprador);
+        assertThat(depois.get("historicoInferido")).isEqualTo(true);
+        var novasEtapas = (List<?>) depois.get("etapas");
+        assertThat(novasEtapas).hasSize(1);
+        assertThat(((Map<?, ?>) novasEtapas.getFirst()).get("estado")).isEqualTo("producao");
+    }
+
     @org.junit.jupiter.api.BeforeEach
     void preferenciaMockada() {
         when(provedor.buscar(any())).thenReturn(List.of());
@@ -140,7 +169,13 @@ class PedidoWorkflowPostgresTest {
         var checkout = new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)), "padrao", "checkout_pro",
                 Map.of("cep", "52021030", "endereco", "Rua de teste", "cidade", "Recife", "estado", "PE"));
         UUID id = pedidos.checkout(checkout, comprador, "compra-1");
+        assertThat(jdbc.queryForList("SELECT estado FROM pedido_etapas WHERE pedido_id = ? ORDER BY id",
+                String.class, id)).containsExactly("aguardando_reserva");
         assertThat(pedidos.checkout(checkout, comprador, "compra-1")).isEqualTo(id);
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug, new BigDecimal("999.00"),
+                "unica", "atelie-teste", artesao));
+        assertThat(((Map<?, ?>) ((List<?>) pedidos.consultar(id, comprador).get("itens")).getFirst())
+                .get("preco")).isEqualTo(new BigDecimal("100.00"));
         assertThatThrownBy(() -> pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 2)),
                 "padrao", "checkout_pro", checkout.endereco()), comprador, "compra-1"))
                 .isInstanceOf(PedidoException.class);
@@ -150,6 +185,9 @@ class PedidoWorkflowPostgresTest {
         aprovar(id, "evento-pago-1");
         assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("confirmado");
         pedidos.producao(id, artesao);
+        assertThat(jdbc.queryForList("SELECT estado FROM pedido_etapas WHERE pedido_id = ? ORDER BY id",
+                String.class, id)).containsExactly("aguardando_reserva", "aguardando_pagamento",
+                        "confirmacao_pendente", "confirmado", "producao");
         assertThatThrownBy(() -> pedidos.encerrar(id, comprador, "cancelado", "Cancelado pelo comprador."))
                 .isInstanceOf(PedidoException.class)
                 .hasMessageContaining("mediação");
