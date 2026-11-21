@@ -169,7 +169,14 @@ public class PedidoService {
     public Map<String, Object> consultar(UUID id, UUID comprador) {
         var pedido = obter(id, false);
         if (!pedido.comprador().equals(comprador)) throw erro(404, "PEDIDO_NAO_ENCONTRADO", "Pedido não encontrado.");
-        return resposta(pedido);
+        var dados = resposta(pedido);
+        try {
+            dados.put("endereco", json.readTree(jdbc.queryForObject(
+                    "SELECT endereco::text FROM pedidos WHERE id = ?", String.class, id)));
+        } catch (JacksonException exception) {
+            throw new IllegalStateException("Endereço armazenado inválido.", exception);
+        }
+        return dados;
     }
 
     @Transactional(readOnly = true)
@@ -182,6 +189,12 @@ public class PedidoService {
     @Transactional(readOnly = true)
     public Map<String, Object> consultarInterno(UUID id) {
         return resposta(obter(id, false));
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, UUID> participantes(UUID id) {
+        var pedido = obter(id, false);
+        return Map.of("compradorId", pedido.comprador(), "artesaoId", pedido.artesao());
     }
 
     @Transactional(readOnly = true)
@@ -403,9 +416,31 @@ public class PedidoService {
         dados.put("avaliado", false);
         dados.put("simulado", false);
         dados.put("motivoEncerramento", pedido.motivo());
-        dados.put("etapas", List.of(Map.of("estado", pedido.estado(), "titulo", "Situação do pedido",
-                "detalhe", "Acompanhe o andamento desta operação.", "concluida",
-                !pedido.estado().endsWith("pendente"), "atual", true)));
+        boolean historicoIncompleto = Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT historico_incompleto FROM pedidos WHERE id = ?", Boolean.class, pedido.id()));
+        if (historicoIncompleto) dados.put("historicoInferido", true);
+        var etapas = jdbc.query("SELECT estado, titulo, detalhe, nota, criada_em FROM pedido_etapas "
+                + "WHERE pedido_id = ? ORDER BY id", (rs, row) -> {
+                    var etapa = new LinkedHashMap<String, Object>();
+                    etapa.put("estado", rs.getString("estado"));
+                    etapa.put("titulo", rs.getString("titulo"));
+                    etapa.put("detalhe", rs.getString("detalhe"));
+                    etapa.put("nota", rs.getString("nota"));
+                    etapa.put("criadaEm", rs.getObject("criada_em", OffsetDateTime.class));
+                    etapa.put("concluida", true);
+                    etapa.put("atual", false);
+                    return etapa;
+                }, pedido.id());
+        if (etapas.isEmpty()) {
+            dados.put("historicoInferido", true);
+            dados.put("etapas", List.of(Map.of("estado", pedido.estado(), "titulo", "Situação atual",
+                    "detalhe", "O histórico anterior não está disponível.", "concluida", false, "atual", true)));
+        } else {
+            etapas.getLast().put("atual", true);
+            etapas.getLast().put("concluida", !pedido.estado().endsWith("pendente")
+                    && !pedido.estado().startsWith("aguardando"));
+            dados.put("etapas", etapas);
+        }
         dados.put("itens", itens.stream().map(item -> Map.of("slug", item.slug(),
                 "quantidade", item.quantidade(), "preco", item.preco())).toList());
         return dados;

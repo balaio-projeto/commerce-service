@@ -45,6 +45,7 @@ import br.com.balaio.commerce.payment.CheckoutProService;
 @EnabledIfEnvironmentVariable(named = "COMMERCE_POSTGRES_TEST", matches = "true")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "balaio.worker.enabled=false", "payment.mercadopago.worker-enabled=false",
+        "balaio.internal-token=12345678901234567890123456789012",
         "payment.mercadopago.environment=sandbox",
         "payment.mercadopago.access-token=APP_USR-test-placeholder",
         "payment.mercadopago.webhook-secret=webhook-test-placeholder",
@@ -111,6 +112,26 @@ class PedidosHttpPostgresTest {
         String tokenArtesao = token(artesao, "artesao");
         String tokenOutro = token(outro, "artesao");
         String tokenComprador = token(comprador, "comprador");
+        String tokenOutroComprador = token(UUID.randomUUID(), "comprador");
+        var listaComprador = json.readTree(chamar("GET", "/api/v1/pedidos", tokenComprador, null).body()).path("dados");
+        assertThat(listaComprador.size()).isEqualTo(1);
+        assertThat(listaComprador.get(0).path("endereco").isMissingNode()).isTrue();
+        assertThat(json.readTree(chamar("GET", "/api/v1/pedidos", tokenOutroComprador, null).body())
+                .path("dados").size()).isZero();
+        assertThat(chamar("GET", "/api/v1/pedidos/" + id, tokenOutroComprador, null).statusCode()).isEqualTo(404);
+        var detalhe = json.readTree(chamar("GET", "/api/v1/pedidos/" + id, tokenComprador, null).body())
+                .path("dados");
+        assertThat(detalhe.path("endereco").path("cidade").asString()).isEqualTo("Recife");
+        assertThat(detalhe.path("itens").get(0).path("preco").decimalValue()).isEqualByComparingTo("50.00");
+        assertThat(detalhe.path("etapas").size()).isGreaterThanOrEqualTo(3);
+        assertThat(detalhe.path("etapas").get(0).path("estado").asString()).isEqualTo("aguardando_reserva");
+        String participantes = "/internal/v1/pedidos/" + id + "/participantes";
+        assertThat(chamarInterno(participantes, null).statusCode()).isEqualTo(403);
+        var partes = json.readTree(chamarInterno(participantes, "12345678901234567890123456789012").body())
+                .path("dados");
+        assertThat(partes.path("compradorId").asString()).isEqualTo(comprador.toString());
+        assertThat(partes.path("artesaoId").asString()).isEqualTo(artesao.toString());
+        assertThat(partes.size()).isEqualTo(2);
         assertThat(chamar("GET", "/api/v1/artesao/pedidos-pendentes", null, null).statusCode()).isEqualTo(401);
         var lista = chamar("GET", "/api/v1/artesao/pedidos-pendentes?artesao=" + outro, tokenArtesao, null);
         assertThat(lista.statusCode()).isEqualTo(200);
@@ -133,6 +154,9 @@ class PedidosHttpPostgresTest {
         assertThat(json.readTree(alterado.body()).path("erro").isNull()).isTrue();
         assertThat(json.readTree(chamar("GET", "/api/v1/pedidos/" + id, tokenComprador, null).body())
                 .path("dados").path("estado").asText()).isEqualTo("producao");
+        var etapas = json.readTree(chamar("GET", "/api/v1/pedidos/" + id, tokenComprador, null).body())
+                .path("dados").path("etapas");
+        assertThat(etapas.get(etapas.size() - 1).path("estado").asString()).isEqualTo("producao");
         assertThat(json.readTree(chamar("GET", "/api/v1/artesao/pedidos-pendentes", tokenArtesao, null).body())
                 .path("dados").size()).isZero();
         assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"producao\"}").statusCode()).isEqualTo(409);
@@ -145,6 +169,12 @@ class PedidosHttpPostgresTest {
         if ("PATCH".equals(metodo)) request.method("PATCH", HttpRequest.BodyPublishers.ofString(corpo));
         else request.GET();
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> chamarInterno(String caminho, String token) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + caminho));
+        if (token != null) request.header("X-Balaio-Service-Token", token);
+        return http.send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private static String token(UUID subject, String papel) throws Exception {
