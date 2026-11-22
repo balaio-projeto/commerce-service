@@ -194,9 +194,13 @@ class PedidoWorkflowPostgresTest {
         UUID decisao = UUID.randomUUID();
         pedidos.mediacao(id, decisao, "cancelar_reembolsar");
         assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolso_pendente");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("mediacao_cancelar_reembolsar");
         mockPagamento(id, "evento-pago-1", "refunded");
         pagamentos.aplicarPagamento("evento-pago-1");
         assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolsado");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("mediacao_cancelar_reembolsar");
         assertThat(pedidos.mediacao(id, decisao, "cancelar_reembolsar").get("estado")).isEqualTo("reembolsado");
     }
 
@@ -228,6 +232,144 @@ class PedidoWorkflowPostgresTest {
         pagamentos.aplicarPagamento("pagamento-cancelado");
         pedidos.processar(id);
         assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+    }
+
+    @Test
+    void recusaAguardaReembolsoEConservaCausaAposTimeout() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "recusa-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("70.00"), "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("70.00"), artesao));
+        when(catalogo.confirmar(any(), eq(reserva))).thenReturn("CONSUMIDA");
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, slug);
+        preparar(id);
+        aprovar(id, "pagamento-" + slug);
+        assertThatThrownBy(() -> pedidos.encerrar(id, artesao, "recusado", "não"))
+                .isInstanceOf(PedidoException.class);
+        pedidos.encerrar(id, artesao, "recusado", "Não consigo produzir.");
+        assertThat(pedidos.encerrar(id, artesao, "recusado", "Não consigo produzir.").get("estado"))
+                .isEqualTo("reembolso_pendente");
+        assertThatThrownBy(() -> pedidos.encerrar(id, comprador, "cancelado", "Cancelado."))
+                .isInstanceOf(PedidoException.class);
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(eq(id), eq(reserva));
+        org.mockito.Mockito.doThrow(new ResourceAccessException("timeout"))
+                .when(provedor).reembolsar("pagamento-" + slug, id);
+        pagamentos.tentarOperacao(id);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolso_pendente");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(eq(id), eq(reserva));
+        mockPagamento(id, "pagamento-" + slug, "refunded");
+        pagamentos.aplicarPagamento("pagamento-" + slug);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("recusado");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("recusado");
+        org.mockito.Mockito.verify(catalogo).liberar(id, reserva);
+        mockPagamento(id, "pagamento-" + slug, "approved");
+        pagamentos.aplicarPagamento("pagamento-" + slug);
+        mockPagamento(id, "pagamento-" + slug, "pending");
+        pagamentos.aplicarPagamento("pagamento-" + slug);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("recusado");
+        assertThat(pagamentos.complementar(id, pedidos.consultar(id, comprador)).get("estadoPagamento"))
+                .isEqualTo("refunded");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(1)).liberar(id, reserva);
+    }
+
+    @Test
+    void aprovacaoDuranteCancelamentoNaoLiberaAntesDoEstorno() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "corrida-pagamento-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("45.00"), "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("45.00"), artesao));
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, slug);
+        preparar(id);
+        pedidos.encerrar(id, comprador, "cancelado", null);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelamento_pendente");
+        String pagamentoId = "pagamento-" + slug;
+        mockPagamento(id, pagamentoId, "approved");
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolso_pendente");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(id, reserva);
+        org.mockito.Mockito.doThrow(new ResourceAccessException("timeout"))
+                .when(provedor).reembolsar(pagamentoId, id);
+        pagamentos.tentarOperacao(id);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolso_pendente");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(id, reserva);
+        mockPagamento(id, pagamentoId, "refunded");
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        org.mockito.Mockito.verify(catalogo).liberar(id, reserva);
+    }
+
+    @Test
+    void liberacaoParcialDeVariosItensSoEncerraAposRetry() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID primeira = UUID.randomUUID();
+        UUID segunda = UUID.randomUUID();
+        String slugA = "multiplo-a-" + UUID.randomUUID();
+        String slugB = "multiplo-b-" + UUID.randomUUID();
+        String comum = "multiplo-comum-" + UUID.randomUUID();
+        for (String slug : List.of(slugA, slugB))
+            when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                    new BigDecimal("30.00"), "unica", "atelie", artesao));
+        when(catalogo.cotar(comum)).thenReturn(new CatalogoCliente.Cotacao(comum,
+                new BigDecimal("10.00"), "encomenda", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slugA))).thenReturn(new CatalogoCliente.Reserva(
+                primeira, "RESERVADA", new BigDecimal("30.00"), artesao));
+        when(catalogo.reservar(any(), eq(slugB))).thenReturn(new CatalogoCliente.Reserva(
+                segunda, "RESERVADA", new BigDecimal("30.00"), artesao));
+        when(catalogo.liberar(any(), eq(primeira))).thenReturn("LIBERADA");
+        when(catalogo.liberar(any(), eq(segunda)))
+                .thenThrow(new ResourceAccessException("resposta perdida")).thenReturn("LIBERADA");
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slugA, 1),
+                new PedidoService.Item(slugB, 1), new PedidoService.Item(comum, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, slugA);
+        preparar(id);
+        pedidos.encerrar(id, comprador, "cancelado", null);
+        mockPagamento(id, "pagamento-" + slugA, "cancelled");
+        pagamentos.aplicarPagamento("pagamento-" + slugA);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("encerramento_pendente");
+        assertThat(jdbc.queryForObject("SELECT reserva_estado FROM pedido_itens WHERE pedido_id = ? AND slug = ?",
+                String.class, id, slugA)).isEqualTo("LIBERADA");
+        assertThat(jdbc.queryForObject("SELECT reserva_estado FROM pedido_itens WHERE pedido_id = ? AND slug = ?",
+                String.class, id, slugB)).isNull();
+        pedidos.processar(id);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(1)).liberar(id, primeira);
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(2)).liberar(id, segunda);
+    }
+
+    @Test
+    void cancelamentoRecuperaReservaExpiradaSemCriarOutra() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "expirada-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("20.00"), "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "EXPIRADA", new BigDecimal("20.00"), artesao));
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, slug);
+        pedidos.encerrar(id, comprador, "cancelado", null);
+        pedidos.processar(id);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        assertThat(jdbc.queryForObject("SELECT reserva_id FROM pedido_itens WHERE pedido_id = ? AND slug = ?",
+                UUID.class, id, slug)).isEqualTo(reserva);
+        assertThat(jdbc.queryForObject("SELECT reserva_estado FROM pedido_itens WHERE pedido_id = ? AND slug = ?",
+                String.class, id, slug)).isEqualTo("EXPIRADA");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(eq(id), eq(reserva));
     }
 
     @Test
@@ -268,6 +410,8 @@ class PedidoWorkflowPostgresTest {
         UUID decisao = UUID.randomUUID();
         assertThat(pedidos.mediacao(id, decisao, "negar").get("estado")).isEqualTo("confirmado");
         assertThat(pedidos.mediacao(id, decisao, "negar").get("estado")).isEqualTo("confirmado");
+        assertThatThrownBy(() -> pedidos.mediacao(id, UUID.randomUUID(), "cancelar_reembolsar"))
+                .isInstanceOf(PedidoException.class);
         assertThatThrownBy(() -> pedidos.checkout(new PedidoService.Checkout(checkout.itens(), "padrao", "checkout_pro",
                 Map.of("cep", "inválido", "endereco", "Rua de teste", "cidade", "Recife", "estado", "PE")),
                 comprador, "endereco-invalido")).isInstanceOf(PedidoException.class);
@@ -370,7 +514,9 @@ class PedidoWorkflowPostgresTest {
         }
         mockPagamento(id, "pagamento-disputa", "refunded");
         pagamentos.aplicarPagamento("pagamento-disputa");
-        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolsado");
+        String causa = jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id);
+        assertThat(causa).isIn("cancelado", "recusado");
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo(causa);
         org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(1)).liberar(eq(id), eq(reserva));
     }
 
@@ -466,9 +612,14 @@ class PedidoWorkflowPostgresTest {
     void reembolsoIntegralConfirmadoPorValorEncerraPedidoEEventoLiveNaoEntraNaInbox() throws Exception {
         UUID comprador = UUID.randomUUID();
         UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
         String slug = "reembolso-" + UUID.randomUUID();
         when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug, new BigDecimal("80.00"),
-                "encomenda", "atelie", artesao));
+                "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("80.00"), artesao));
+        when(catalogo.confirmar(any(), eq(reserva))).thenReturn("CONSUMIDA");
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
         UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
                 "padrao", "checkout_pro", endereco()), comprador, "reembolso-" + UUID.randomUUID());
         preparar(id);
@@ -479,7 +630,27 @@ class PedidoWorkflowPostgresTest {
         when(provedor.pagamento("123456780")).thenReturn(new CheckoutProClient.Pagamento("123456780",
                 id.toString(), total, "BRL", "approved", false, "ordem-" + id, total));
         pagamentos.aplicarPagamento("123456780");
-        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolsado");
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        assertThat(pagamentos.complementar(id, pedidos.consultar(id, comprador)).get("estadoPagamento"))
+                .isEqualTo("refunded");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("cancelado");
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(1)).liberar(id, reserva);
+
+        mockPagamento(id, "123456780", "approved");
+        pagamentos.aplicarPagamento("123456780");
+        pagamentos.tentarOperacao(id);
+        mockPagamento(id, "123456780", "pending");
+        pagamentos.aplicarPagamento("123456780");
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        assertThat(pagamentos.complementar(id, pedidos.consultar(id, comprador)).get("estadoPagamento"))
+                .isEqualTo("refunded");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("cancelado");
+        assertThat(jdbc.queryForObject("SELECT valor_reembolsado FROM pagamento_intencoes WHERE pedido_id = ?",
+                BigDecimal.class, id)).isEqualByComparingTo(total);
+        org.mockito.Mockito.verify(provedor, org.mockito.Mockito.never()).reembolsar("123456780", id);
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.times(1)).liberar(id, reserva);
 
         String requestId = "live-" + UUID.randomUUID();
         var live = json.readTree("{\"type\":\"payment\",\"live_mode\":true,\"data\":{\"id\":\"123456780\"}}");
@@ -487,6 +658,41 @@ class PedidoWorkflowPostgresTest {
                 requestId, "123456780", live)).isInstanceOf(PedidoException.class);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pagamento_notificacoes WHERE request_id = ?",
                 Integer.class, requestId)).isZero();
+    }
+
+    @Test
+    void aprovacaoTardiaAposCancelamentoSemPagamentoExigeReembolso() {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "tardia-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug, new BigDecimal("55.00"),
+                "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("55.00"), artesao));
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", endereco()), comprador, slug);
+        preparar(id);
+        pedidos.encerrar(id, comprador, "cancelado", null);
+        jdbc.update("UPDATE pedidos SET atualizado_em = now() - interval '15 minutes' WHERE id = ?", id);
+        when(provedor.buscarPagamentos(id.toString())).thenReturn(List.of());
+        pagamentos.processarOperacao(id);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+
+        String pagamentoId = "pagamento-tardio-" + slug;
+        mockPagamento(id, pagamentoId, "approved");
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("reembolso_pendente");
+        assertThat(jdbc.queryForObject("SELECT encerramento FROM pedidos WHERE id = ?", String.class, id))
+                .isEqualTo("cancelado");
+        pagamentos.tentarOperacao(id);
+        org.mockito.Mockito.verify(provedor).reembolsar(pagamentoId, id);
+        mockPagamento(id, pagamentoId, "refunded");
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(pedidos.consultar(id, comprador).get("estado")).isEqualTo("cancelado");
+        assertThat(pagamentos.complementar(id, pedidos.consultar(id, comprador)).get("estadoPagamento"))
+                .isEqualTo("refunded");
     }
 
     private Map<String, String> endereco() {

@@ -79,7 +79,10 @@ public class CheckoutProService {
     public Map<String, Object> complementar(UUID pedidoId, Map<String, Object> pedido) {
         var dados = new LinkedHashMap<>(pedido);
         var intencao = intencao(pedidoId);
+        BigDecimal total = (BigDecimal) pedido.get("total");
         dados.put("estadoPagamento", intencao == null ? "aguardando_intencao"
+                : "refunded".equals(intencao.statusProvedor())
+                        || (total != null && intencao.valorReembolsado().compareTo(total) >= 0) ? "refunded"
                 : intencao.statusProvedor() == null ? "aguardando_pagamento" : intencao.statusProvedor());
         dados.put("checkoutUrl", intencao != null && "PRONTA".equals(intencao.estado())
                 && "aguardando_pagamento".equals(pedido.get("estado")) ? intencao.checkoutUrl() : null);
@@ -144,35 +147,44 @@ public class CheckoutProService {
             throw new IllegalStateException("Valor de pagamento divergente.");
         transacoes.executeWithoutResult(status -> {
             String estado = jdbc.queryForObject("SELECT estado FROM pedidos WHERE id = ? FOR UPDATE", String.class, pedidoId);
-            var anterior = jdbc.query("SELECT pagamento_id, status_provedor FROM pagamento_intencoes "
-                    + "WHERE pedido_id = ? FOR UPDATE", (rs, row) -> Map.entry(
+            var anterior = jdbc.query("SELECT pagamento_id, status_provedor, valor_reembolsado FROM pagamento_intencoes "
+                    + "WHERE pedido_id = ? FOR UPDATE", (rs, row) -> new Intencao(null, null, null,
                     rs.getString(1) == null ? "" : rs.getString(1),
-                    rs.getString(2) == null ? "" : rs.getString(2)), pedidoId).getFirst();
-            if (!anterior.getKey().isBlank() && !anterior.getKey().equals(pagamentoId)
-                    && !List.of("rejected", "cancelled", "expired").contains(anterior.getValue()))
+                    rs.getString(2) == null ? "" : rs.getString(2),
+                    rs.getBigDecimal(3) == null ? BigDecimal.ZERO : rs.getBigDecimal(3)), pedidoId).getFirst();
+            if (!anterior.pagamentoId().isBlank() && !anterior.pagamentoId().equals(pagamentoId)
+                    && !List.of("rejected", "cancelled", "expired").contains(anterior.statusProvedor()))
                 throw new IllegalStateException("Outra cobrança já vinculada ao pedido.");
-            jdbc.update("UPDATE pagamento_intencoes SET pagamento_id = ?, status_provedor = ?, atualizado_em = now() "
-                    + "WHERE pedido_id = ?", pagamentoId, pagamento.status(), pedidoId);
+            BigDecimal valorReembolsado = anterior.valorReembolsado().max(
+                    "refunded".equals(pagamento.status()) ? total : pagamento.valorReembolsado());
+            boolean estornoConfirmado = "refunded".equals(anterior.statusProvedor())
+                    || "refunded".equals(pagamento.status())
+                    || valorReembolsado.compareTo(total) >= 0;
+            String statusProvedor = "refunded".equals(anterior.statusProvedor()) || "refunded".equals(pagamento.status())
+                    ? "refunded"
+                    : estornoConfirmado ? "approved" : pagamento.status();
+            jdbc.update("UPDATE pagamento_intencoes SET pagamento_id = ?, status_provedor = ?, "
+                    + "valor_reembolsado = ?, atualizado_em = now() WHERE pedido_id = ?",
+                    pagamentoId, statusProvedor, valorReembolsado, pedidoId);
+            if (estornoConfirmado) {
+                if (!List.of("cancelado", "recusado", "reembolsado", "falha_reserva", "falha_pagamento")
+                        .contains(estado))
+                    mudar(pedidoId, "encerramento_pendente", "reembolsado");
+                return;
+            }
             switch (pagamento.status()) {
                 case "approved" -> {
-                    if (pagamento.valorReembolsado().compareTo(total) >= 0) {
-                        if (!"reembolsado".equals(estado))
-                            mudar(pedidoId, "encerramento_pendente", "reembolsado");
-                        break;
-                    }
-                    if (pagamento.valorReembolsado().signum() != 0) break;
+                    if (valorReembolsado.signum() != 0) break;
                     if ("aguardando_pagamento".equals(estado)) mudar(pedidoId, "confirmacao_pendente", null);
                     else if (List.of("cancelamento_pendente", "encerramento_pendente", "falha_pagamento",
                             "cancelado", "recusado").contains(estado))
                         mudar(pedidoId, "reembolso_pendente", "reembolsado");
                 }
                 case "rejected", "cancelled", "expired" -> {
-                    if ("aguardando_pagamento".equals(estado) || "cancelamento_pendente".equals(estado))
+                    if (List.of("aguardando_pagamento", "cancelamento_pendente", "reembolso_pendente")
+                            .contains(estado))
                         mudar(pedidoId, "encerramento_pendente",
                                 "cancelamento_pendente".equals(estado) ? "cancelado" : "falha_pagamento");
-                }
-                case "refunded" -> {
-                    if (!"reembolsado".equals(estado)) mudar(pedidoId, "encerramento_pendente", "reembolsado");
                 }
                 case "pending", "in_process", "authorized", "in_mediation", "charged_back" -> { }
                 default -> { } // Estado desconhecido exige reconciliação; não confirma nem libera.
@@ -292,12 +304,12 @@ public class CheckoutProService {
     }
 
     private void mudar(UUID id, String estado, String encerramento) {
-        jdbc.update("UPDATE pedidos SET estado = ?, encerramento = COALESCE(?, encerramento), atualizado_em = now() "
+        jdbc.update("UPDATE pedidos SET estado = ?, encerramento = COALESCE(encerramento, ?), atualizado_em = now() "
                 + "WHERE id = ?", estado, encerramento, id);
     }
 
     private boolean mudarSe(UUID id, String anterior, String destino, String encerramento) {
-        return jdbc.update("UPDATE pedidos SET estado = ?, encerramento = COALESCE(?, encerramento), "
+        return jdbc.update("UPDATE pedidos SET estado = ?, encerramento = COALESCE(encerramento, ?), "
                 + "atualizado_em = now() WHERE id = ? AND estado = ?", destino, encerramento, id, anterior) == 1;
     }
 
@@ -307,12 +319,13 @@ public class CheckoutProService {
     }
 
     private Intencao intencao(UUID id) {
-        return jdbc.query("SELECT estado, preferencia_id, checkout_url, pagamento_id, status_provedor "
+        return jdbc.query("SELECT estado, preferencia_id, checkout_url, pagamento_id, status_provedor, valor_reembolsado "
                 + "FROM pagamento_intencoes WHERE pedido_id = ?", (rs, row) -> new Intencao(
-                rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)), id)
+                rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
+                rs.getBigDecimal(6)), id)
                 .stream().findFirst().orElse(null);
     }
 
     private record Intencao(String estado, String preferenciaId, String checkoutUrl, String pagamentoId,
-                            String statusProvedor) { }
+                            String statusProvedor, BigDecimal valorReembolsado) { }
 }

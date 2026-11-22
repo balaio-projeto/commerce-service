@@ -1,8 +1,12 @@
 package br.com.balaio.commerce.order;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -34,6 +38,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -78,6 +83,8 @@ class PedidosHttpPostgresTest {
     @Autowired ObjectMapper json;
     @MockitoBean CatalogoCliente catalogo;
     @MockitoBean CheckoutProClient provedor;
+    @MockitoBean EnderecoSalvoClient enderecos;
+    @Autowired JdbcTemplate jdbc;
     private final HttpClient http = HttpClient.newHttpClient();
 
     @Test
@@ -162,6 +169,75 @@ class PedidosHttpPostgresTest {
         assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"producao\"}").statusCode()).isEqualTo(409);
     }
 
+    @Test
+    void recusaHttpAguardaEstornoEProducaoExigeMediacao() throws Exception {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "recusa-http-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("50.00"), "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("50.00"), artesao));
+        when(catalogo.confirmar(any(), eq(reserva))).thenReturn("CONSUMIDA");
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
+        when(provedor.buscar(any())).thenReturn(List.of());
+        when(provedor.criar(any(), any(), any())).thenAnswer(invocacao -> {
+            UUID id = invocacao.getArgument(0);
+            return new CheckoutProClient.Preferencia("pref-" + id,
+                    "https://sandbox.mercadopago.com/checkout/pay?pref_id=pref-" + id);
+        });
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of("cep", "52021030", "endereco", "Rua",
+                        "cidade", "Recife", "estado", "PE")), comprador, slug);
+        pedidos.processar(id);
+        pagamentos.preparar(id);
+        String pagamentoId = "pagamento-" + slug;
+        BigDecimal total = (BigDecimal) pedidos.consultarInterno(id).get("total");
+        when(provedor.pagamento(pagamentoId)).thenReturn(new CheckoutProClient.Pagamento(
+                pagamentoId, id.toString(), total, "BRL", "approved", false, "ordem-" + id, BigDecimal.ZERO));
+        when(provedor.ordem("ordem-" + id)).thenReturn(new CheckoutProClient.Ordem("pref-" + id, id.toString()));
+        pagamentos.aplicarPagamento(pagamentoId);
+
+        String recusar = "/api/v1/pedidos/" + id + "/recusar";
+        String corpo = "{\"motivo\":\"Não consigo produzir.\"}";
+        String tokenArtesao = token(artesao, "artesao");
+        assertThat(chamar("PATCH", recusar, null, corpo).statusCode()).isEqualTo(401);
+        assertThat(chamar("PATCH", recusar, token(comprador, "comprador"), corpo).statusCode()).isEqualTo(403);
+        assertThat(chamar("PATCH", recusar, token(UUID.randomUUID(), "artesao"), corpo).statusCode())
+                .isEqualTo(403);
+        assertThat(chamar("PATCH", recusar, tokenArtesao, "{\"motivo\":\"não\"}").statusCode())
+                .isEqualTo(400);
+        var pendente = chamar("PATCH", recusar, tokenArtesao, corpo);
+        assertThat(pendente.statusCode()).isEqualTo(202);
+        assertThat(json.readTree(pendente.body()).path("dados").path("estado").asString())
+                .isEqualTo("reembolso_pendente");
+        assertThat(chamar("PATCH", recusar, tokenArtesao, corpo).statusCode()).isEqualTo(202);
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(id, reserva);
+        when(provedor.pagamento(pagamentoId)).thenReturn(new CheckoutProClient.Pagamento(
+                pagamentoId, id.toString(), total, "BRL", "refunded", false, "ordem-" + id, total));
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(chamar("PATCH", recusar, tokenArtesao, corpo).statusCode()).isEqualTo(200);
+        assertThat(json.readTree(chamar("GET", "/api/v1/pedidos/" + id,
+                token(comprador, "comprador"), null).body()).path("dados").path("estado").asString())
+                .isEqualTo("recusado");
+        org.mockito.Mockito.verify(catalogo).liberar(id, reserva);
+
+        UUID segundo = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of("cep", "52021030", "endereco", "Rua",
+                        "cidade", "Recife", "estado", "PE")), comprador, slug + "-segundo");
+        pedidos.processar(segundo);
+        // Estado avançado é usado para verificar o contrato HTTP de mediação.
+        for (String estado : List.of("producao", "enviado", "entregue")) {
+            jdbc.update("UPDATE pedidos SET estado = ? WHERE id = ?", estado, segundo);
+            var mediacao = chamar("PATCH", "/api/v1/pedidos/" + segundo + "/cancelar",
+                    token(comprador, "comprador"), "{}");
+            assertThat(mediacao.statusCode()).isEqualTo(409);
+            assertThat(json.readTree(mediacao.body()).path("erro").path("codigo").asString())
+                    .isEqualTo("MEDIACAO_NECESSARIA");
+        }
+    }
+
     private HttpResponse<String> chamar(String metodo, String caminho, String token, String corpo) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + caminho))
                 .header("Content-Type", "application/json");
@@ -184,6 +260,65 @@ class PedidosHttpPostgresTest {
         var jwt = new JWSObject(new JWSHeader(JWSAlgorithm.RS256), new Payload(claims));
         jwt.sign(new RSASSASigner((RSAPrivateKey) KEYS.getPrivate()));
         return jwt.serialize();
+    }
+
+    @Test
+    void snapshotDoPedidoNaoMudaComEdicaoOuRemocaoDoPerfilERepeticaoNaoConsultaPerfil() throws Exception {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID enderecoId = UUID.randomUUID();
+        String slug = "snapshot-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(
+                slug, new BigDecimal("50.00"), "encomenda", "atelie", artesao));
+        when(enderecos.consultar(enderecoId, "token-comprador")).thenReturn(Map.of(
+                "cep", "50000-000", "endereco", "Rua A, 1, Boa Vista", "cidade", "Recife", "estado", "PE"));
+        var comando = new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of(), enderecoId);
+        String chave = "chave-" + UUID.randomUUID();
+
+        UUID pedido = pedidos.checkoutSalvo(comando, comprador, chave,
+                () -> enderecos.consultar(enderecoId, "token-comprador"));
+
+        // Perfil editado depois do pedido: o snapshot gravado não pode acompanhar a mudança.
+        when(enderecos.consultar(enderecoId, "token-comprador")).thenReturn(Map.of(
+                "cep", "53000-000", "endereco", "Rua Nova, 9, Casa Caiada", "cidade", "Olinda", "estado", "PE"));
+        UUID repetido = pedidos.checkoutSalvo(comando, comprador, chave,
+                () -> enderecos.consultar(enderecoId, "token-comprador"));
+
+        // Endereço removido do perfil: a repetição com a mesma chave ainda devolve o pedido.
+        when(enderecos.consultar(enderecoId, "token-comprador")).thenThrow(
+                new PedidoException(404, "ENDERECO_NAO_ENCONTRADO", "Endereço salvo não encontrado."));
+        UUID removido = pedidos.checkoutSalvo(comando, comprador, chave,
+                () -> enderecos.consultar(enderecoId, "token-comprador"));
+
+        assertThat(repetido).isEqualTo(pedido);
+        assertThat(removido).isEqualTo(pedido);
+        verify(enderecos, times(1)).consultar(enderecoId, "token-comprador");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pedidos WHERE comprador_id = ?", Integer.class, comprador))
+                .isEqualTo(1);
+        var snapshot = json.readTree(jdbc.queryForObject(
+                "SELECT endereco::text FROM pedidos WHERE id = ?", String.class, pedido));
+        assertThat(snapshot.path("endereco").asString()).isEqualTo("Rua A, 1, Boa Vista");
+        assertThat(snapshot.path("cidade").asString()).isEqualTo("Recife");
+        assertThat(snapshot.path("cep").asString()).isEqualTo("50000-000");
+    }
+
+    @Test
+    void enderecoDeOutroCompradorNaoGeraPedido() {
+        UUID comprador = UUID.randomUUID();
+        UUID enderecoDeOutro = UUID.randomUUID();
+        String slug = "intruso-" + UUID.randomUUID();
+        when(enderecos.consultar(eq(enderecoDeOutro), anyString())).thenThrow(
+                new PedidoException(404, "ENDERECO_NAO_ENCONTRADO", "Endereço salvo não encontrado."));
+        var comando = new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of(), enderecoDeOutro);
+
+        assertThatThrownBy(() -> pedidos.checkoutSalvo(comando, comprador, "chave-" + UUID.randomUUID(),
+                () -> enderecos.consultar(enderecoDeOutro, "token-comprador")))
+                .isInstanceOfSatisfying(PedidoException.class,
+                        erro -> assertThat(erro.codigo()).isEqualTo("ENDERECO_NAO_ENCONTRADO"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pedidos WHERE comprador_id = ?", Integer.class, comprador))
+                .isZero();
     }
 
     private static KeyPair chaves() {

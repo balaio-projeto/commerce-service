@@ -17,6 +17,22 @@ No Windows: `.\mvnw.cmd spring-boot:run`. Testes: `.\mvnw.cmd test`.
 
 O `Dockerfile` constrói uma imagem própria. Em `platform`, use `docker compose up --build -d commerce-service` para iniciar este serviço e seu banco ou `docker compose --profile extended up --build -d` para iniciar todos. Health: `http://localhost:8083/actuator/health`.
 
+A especificação OpenAPI do serviço fica em `http://localhost:8083/v3/api-docs`.
+
+## PI-189: endereço salvo no checkout
+
+`POST /api/v1/checkout` aceita `enderecoId` como alternativa ao endereço digitado. Quando o campo vem preenchido, o commerce consulta `GET /api/v1/usuario/enderecos/{id}` no profile-service com o JWT do comprador e grava um snapshot dos dados retornados no pedido. Os campos `endereco` enviados junto com o id são ignorados.
+
+A consulta acontece depois da checagem de idempotência. Repetir um checkout já criado devolve o mesmo pedido sem consultar o profile, então o pedido não depende de o endereço salvo continuar existindo. Editar ou remover o endereço depois da compra não altera o snapshot.
+
+| Situação | Resposta |
+|---|---|
+| Endereço de outro comprador ou inexistente | 404 `ENDERECO_NAO_ENCONTRADO` |
+| Endereço sem cidade e estado no campo `bairro` | 422 `ENDERECO_INCOMPLETO` |
+| Profile-service indisponível ou com erro | 503 `PERFIL_INDISPONIVEL` |
+
+Variável: `PROFILE_SERVICE_URL` (padrão `http://localhost:8082`). O commerce não lê o banco do profile.
+
 ## PI-187: sacola do comprador
 
 `GET /api/v1/estado/sacola` devolve `{dados:[{slug,quantidade}],erro:null}` para o comprador autenticado; sem itens, `dados` é `[]`. `PUT /api/v1/estado/sacola` recebe `{sacola:[{slug,quantidade}]}` e substitui atomicamente as linhas da conta do `sub` no JWT. Não aceita identidade nem preço no corpo. Quantidades válidas são 1 a 3, e peça única aceita somente 1. O commerce valida slug, preço atual e disponibilidade pela cotação HTTP interna do catálogo. A sacola não cria reserva nem congela preço; o checkout faz nova cotação antes de reservar.
@@ -37,7 +53,7 @@ O commerce persiste o pedido antes de reservar e cria uma intenção local antes
 
 `POST /api/v1/pagamentos/mercado-pago/notificacoes` recebe somente notificações `payment` com HMAC válida. A notificação é gravada antes do HTTP 200; o worker consulta `GET /v1/payments/{id}` e `GET /merchant_orders/{id}` com o token de teste e verifica referência, preferência, valor, moeda e `live_mode=false`. O antigo endpoint interno de pagamento simulado foi removido. Redirect, query string e retorno do navegador não mudam o estado financeiro. Status `approved` inicia confirmação da reserva; `pending`, `in_process`, `authorized`, `in_mediation` e estados desconhecidos não encerram o pedido; `rejected`, `cancelled` e `expired` iniciam liberação. Cobrança aprovada após encerramento inicia reembolso pendente, sem marcar venda concluída.
 
-`PATCH /api/v1/pedidos/{id}/cancelar` exige o comprador e `/recusar` exige o artesão titular. Cancelamento de pagamento pendente usa `PUT /v1/payments/{id}` com `status=cancelled` quando há payment ID; sem pagamento identificado, aguarda expiração e consulta autenticada antes de encerrar. Pedido aprovado passa por `reembolso_pendente` e usa `POST /v1/payments/{id}/refunds` com chave idempotente; somente `refunded` ou valor reembolsado integral consultado ao provedor permite `reembolsado` e liberação da reserva. A decisão `cancelar_reembolsar` da mediação interna segue a mesma regra. Falha de rede mantém estado pendente e é reprocessada. O sandbox pode recusar cancelamento ou reembolso conforme o método e estado do pagamento; o serviço não promete conclusão antecipada. Não há retenção nem repasse ao artesão nesta integração.
+`PATCH /api/v1/pedidos/{id}/cancelar` exige o comprador e `/recusar` exige o artesão titular. Cancelamento após início da produção retorna 409 `MEDIACAO_NECESSARIA`. Os endpoints retornam 202 enquanto aguardam cancelamento, reembolso ou liberação. Cancelamento de pagamento pendente usa `PUT /v1/payments/{id}` com `status=cancelled` quando há payment ID; sem pagamento identificado, aguarda expiração e consulta autenticada antes de encerrar. Pedido aprovado passa por `reembolso_pendente` e usa `POST /v1/payments/{id}/refunds` com chave idempotente. Somente `refunded` ou valor integral confirmado pelo provedor permite avançar para `encerramento_pendente`; a liberação da reserva pelo catálogo precisa retornar `LIBERADA` ou `EXPIRADA` antes do estado terminal. A causa permanece `cancelado` ou `recusado` após o estorno; a decisão `cancelar_reembolsar` da mediação mantém sua própria causa persistida. A migration V5 conserva o valor reembolsado informado pelo provedor para que `estadoPagamento` indique `refunded` também quando o status bruto ainda é `approved` após estorno integral; leituras posteriores antigas (`approved` com valor zero ou `pending`) não reduzem o valor reembolsado nem reabrem pedidos já estornados, enquanto aprovação tardia sem estorno anterior ainda encaminha para `reembolso_pendente`. Repetir um encerramento igual devolve o estado atual, e conflito de causa retorna 409. Falha de rede mantém estado pendente e é reprocessada, inclusive por item único já parcialmente liberado. O sandbox pode recusar cancelamento ou reembolso conforme o método e estado do pagamento; o serviço não promete conclusão antecipada. Não há retenção nem repasse ao artesão nesta integração.
 
 `GET /api/v1/pedidos` lista somente os pedidos do comprador do JWT. Para o ateliê, `GET /api/v1/artesao/pedidos-pendentes` lista apenas pedidos `confirmado` com `id`, `pecaSlug`, `comprador`, `quando` e `valor`; `GET /api/v1/artesao/vendas` retorna pedidos pagos ainda ativos para as métricas e vendas. Ambas exigem JWT de artesão e filtram pelo `sub` validado, ignorando qualquer `artesao` informado na query. O nome do comprador aparece como rótulo genérico até existir contrato de consulta de perfil para este dado.
 

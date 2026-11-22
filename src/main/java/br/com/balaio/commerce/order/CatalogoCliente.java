@@ -50,19 +50,24 @@ public class CatalogoCliente {
     }
 
     public String confirmar(UUID pedido, UUID reserva) {
-        return operar(pedido, reserva, "confirmar");
+        return operar(pedido, reserva, "confirmar").path("estado").asText();
     }
 
     public String liberar(UUID pedido, UUID reserva) {
-        return operar(pedido, reserva, "liberar");
+        JsonNode resultado = operar(pedido, reserva, "liberar");
+        String estado = resultado.path("estado").asText();
+        if (!reserva.toString().equals(resultado.path("id").asText())
+                || !pedido.toString().equals(resultado.path("pedidoId").asText())
+                || (!"LIBERADA".equals(estado) && !"EXPIRADA".equals(estado)))
+            throw new IllegalStateException("Liberação não confirmada pelo catálogo.");
+        return estado;
     }
 
-    private String operar(UUID pedido, UUID reserva, String acao) {
-        JsonNode dados = dados(http.post().uri("/internal/v1/reservas/{id}/" + acao, reserva)
+    private JsonNode operar(UUID pedido, UUID reserva, String acao) {
+        return dados(http.post().uri("/internal/v1/reservas/{id}/" + acao, reserva)
                 .header("X-Balaio-Service-Token", segredo())
                 .body(Map.of("pedidoId", pedido.toString(), "chave", acao + ":" + reserva))
                 .retrieve().body(JsonNode.class));
-        return dados.path("estado").asText();
     }
 
     private String segredo() {

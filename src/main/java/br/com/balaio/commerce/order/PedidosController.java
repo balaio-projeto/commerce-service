@@ -25,12 +25,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class PedidosController {
     private final PedidoService pedidos;
     private final CheckoutProService checkoutPro;
+    private final EnderecoSalvoClient enderecos;
     private final String tokenInterno;
 
-    public PedidosController(PedidoService pedidos, CheckoutProService checkoutPro,
+    public PedidosController(PedidoService pedidos, CheckoutProService checkoutPro, EnderecoSalvoClient enderecos,
             @Value("${balaio.internal-token:}") String tokenInterno) {
         this.pedidos = pedidos;
         this.checkoutPro = checkoutPro;
+        this.enderecos = enderecos;
         this.tokenInterno = tokenInterno;
     }
 
@@ -51,7 +53,10 @@ public class PedidosController {
             @RequestHeader("Idempotency-Key") String chave, @AuthenticationPrincipal Jwt jwt) {
         UUID comprador = exigirPapel(jwt, "comprador");
         checkoutPro.exigirDisponivel();
-        UUID id = pedidos.checkout(comando, comprador, chave);
+        UUID id = comando != null && comando.enderecoId() != null
+                ? pedidos.checkoutSalvo(comando, comprador, chave,
+                        () -> enderecos.consultar(comando.enderecoId(), jwt.getTokenValue()))
+                : pedidos.checkout(comando, comprador, chave);
         pedidos.processar(id);
         checkoutPro.preparar(id);
         return ResponseEntity.accepted().body(new Envelope(checkoutPro.complementar(id, pedidos.consultar(id, comprador)), null));
