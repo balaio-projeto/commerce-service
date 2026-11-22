@@ -258,7 +258,7 @@ public class PedidoService {
                 return resposta(pedido);
             throw erro(409, "PEDIDO_CONFLITANTE", "Outro encerramento já foi iniciado.");
         }
-        if ("producao".equals(pedido.estado()) && "cancelado".equals(tipo))
+        if (List.of("producao", "enviado", "entregue").contains(pedido.estado()) && "cancelado".equals(tipo))
             throw erro(409, "MEDIACAO_NECESSARIA", "A produção já começou. Solicite a mediação da plataforma.");
         if ("recusado".equals(tipo) && !"confirmado".equals(pedido.estado()))
             throw erro(409, "PEDIDO_CONFLITANTE", "Só é possível recusar antes da produção.");
@@ -293,12 +293,15 @@ public class PedidoService {
             if (anterior.get().getKey().equals(id) && anterior.get().getValue().equals(decisao)) return resposta(pedido);
             throw erro(409, "MEDIACAO_CONFLITANTE", "Decisão já vinculada a outra operação.");
         }
+        if (!jdbc.queryForList("SELECT id FROM decisoes_mediacao WHERE pedido_id = ? LIMIT 1", UUID.class, id)
+                .isEmpty())
+            throw erro(409, "MEDIACAO_CONFLITANTE", "Este pedido já recebeu uma decisão de mediação.");
         if (pedido.encerramento() != null || !List.of("confirmado", "producao", "enviado", "entregue")
                 .contains(pedido.estado()))
             throw erro(409, "PEDIDO_CONFLITANTE", "Pedido já encerrado.");
         jdbc.update("INSERT INTO decisoes_mediacao(id, pedido_id, decisao) VALUES (?, ?, ?)", decisaoId, id, decisao);
         if ("cancelar_reembolsar".equals(decisao))
-            jdbc.update("UPDATE pedidos SET estado = 'reembolso_pendente', encerramento = 'reembolsado', atualizado_em = now() WHERE id = ?", id);
+            jdbc.update("UPDATE pedidos SET estado = 'reembolso_pendente', encerramento = 'mediacao_cancelar_reembolsar', atualizado_em = now() WHERE id = ?", id);
         return resposta(obter(id, false));
     }
 
@@ -345,6 +348,8 @@ public class PedidoService {
             BigDecimal preco = item.preco();
             if ("unica".equals(item.disponibilidade())) {
                 var reserva = catalogo.reservar(pedido.id(), item.slug());
+                if (!"RESERVADA".equals(reserva.estado()) && !"CONSUMIDA".equals(reserva.estado()))
+                    throw erro(409, "RESERVA_CONFLITANTE", "Reserva não está ativa.");
                 if (!pedido.artesao().equals(reserva.proprietarioId()))
                     throw erro(409, "PEDIDO_CONFLITANTE", "Peça pertence a outro ateliê.");
                 preco = reserva.preco();
@@ -374,18 +379,22 @@ public class PedidoService {
     private void liberarItens(Pedido pedido) {
         for (var item : itens(pedido.id())) {
             if (!"unica".equals(item.disponibilidade()) || "LIBERADA".equals(item.reservaEstado())
-                    || "EXPIRADA".equals(item.reservaEstado())) continue;
+                    || "EXPIRADA".equals(item.reservaEstado()) || "SEM_RESERVA".equals(item.reservaEstado())) continue;
             UUID reservaId = item.reservaId();
             if (reservaId == null) {
                 try {
-                    reservaId = catalogo.reservar(pedido.id(), item.slug()).id();
-                    jdbc.update("UPDATE pedido_itens SET reserva_id = ? WHERE pedido_id = ? AND slug = ?",
-                            reservaId, pedido.id(), item.slug());
+                    var recuperada = catalogo.reservar(pedido.id(), item.slug());
+                    reservaId = recuperada.id();
+                    jdbc.update("UPDATE pedido_itens SET reserva_id = ?, reserva_estado = ? WHERE pedido_id = ? AND slug = ?",
+                            reservaId, recuperada.estado(), pedido.id(), item.slug());
+                    if (List.of("LIBERADA", "EXPIRADA").contains(recuperada.estado())) continue;
+                    if (!List.of("RESERVADA", "CONSUMIDA").contains(recuperada.estado()))
+                        throw erro(409, "RESERVA_CONFLITANTE", "Estado da reserva desconhecido.");
                 } catch (HttpClientErrorException.Conflict conflito) {
-                    // Nunca houve reserva ativa para esta chave, ou ela já expirou.
-                    jdbc.update("UPDATE pedido_itens SET reserva_estado = 'EXPIRADA' WHERE pedido_id = ? AND slug = ?",
+                    if (!conflitoSemReserva(conflito)) throw conflito;
+                    jdbc.update("UPDATE pedido_itens SET reserva_estado = 'SEM_RESERVA' WHERE pedido_id = ? AND slug = ?",
                             pedido.id(), item.slug());
-                    continue;
+                    continue; // A chave estável não possui reserva anterior e a peça está indisponível.
                 }
             }
             String estado = catalogo.liberar(pedido.id(), reservaId);
@@ -395,7 +404,20 @@ public class PedidoService {
                     estado, pedido.id(), item.slug());
         }
         jdbc.update("UPDATE pedidos SET estado = ?, atualizado_em = now() "
-                + "WHERE id = ? AND estado = 'encerramento_pendente'", pedido.encerramento(), pedido.id());
+                + "WHERE id = ? AND estado = 'encerramento_pendente'", estadoFinal(pedido.encerramento()), pedido.id());
+    }
+
+    private String estadoFinal(String encerramento) {
+        return "mediacao_cancelar_reembolsar".equals(encerramento) ? "reembolsado" : encerramento;
+    }
+
+    private boolean conflitoSemReserva(HttpClientErrorException.Conflict conflito) {
+        try {
+            return "PECA_INDISPONIVEL".equals(json.readTree(conflito.getResponseBodyAsString())
+                    .path("erro").path("codigo").asText());
+        } catch (JacksonException respostaInvalida) {
+            return false;
+        }
     }
 
     private void registrarFalha(UUID id, RuntimeException falha) {

@@ -169,6 +169,75 @@ class PedidosHttpPostgresTest {
         assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"producao\"}").statusCode()).isEqualTo(409);
     }
 
+    @Test
+    void recusaHttpAguardaEstornoEProducaoExigeMediacao() throws Exception {
+        UUID comprador = UUID.randomUUID();
+        UUID artesao = UUID.randomUUID();
+        UUID reserva = UUID.randomUUID();
+        String slug = "recusa-http-" + UUID.randomUUID();
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("50.00"), "unica", "atelie", artesao));
+        when(catalogo.reservar(any(), eq(slug))).thenReturn(new CatalogoCliente.Reserva(
+                reserva, "RESERVADA", new BigDecimal("50.00"), artesao));
+        when(catalogo.confirmar(any(), eq(reserva))).thenReturn("CONSUMIDA");
+        when(catalogo.liberar(any(), eq(reserva))).thenReturn("LIBERADA");
+        when(provedor.buscar(any())).thenReturn(List.of());
+        when(provedor.criar(any(), any(), any())).thenAnswer(invocacao -> {
+            UUID id = invocacao.getArgument(0);
+            return new CheckoutProClient.Preferencia("pref-" + id,
+                    "https://sandbox.mercadopago.com/checkout/pay?pref_id=pref-" + id);
+        });
+        UUID id = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of("cep", "52021030", "endereco", "Rua",
+                        "cidade", "Recife", "estado", "PE")), comprador, slug);
+        pedidos.processar(id);
+        pagamentos.preparar(id);
+        String pagamentoId = "pagamento-" + slug;
+        BigDecimal total = (BigDecimal) pedidos.consultarInterno(id).get("total");
+        when(provedor.pagamento(pagamentoId)).thenReturn(new CheckoutProClient.Pagamento(
+                pagamentoId, id.toString(), total, "BRL", "approved", false, "ordem-" + id, BigDecimal.ZERO));
+        when(provedor.ordem("ordem-" + id)).thenReturn(new CheckoutProClient.Ordem("pref-" + id, id.toString()));
+        pagamentos.aplicarPagamento(pagamentoId);
+
+        String recusar = "/api/v1/pedidos/" + id + "/recusar";
+        String corpo = "{\"motivo\":\"Não consigo produzir.\"}";
+        String tokenArtesao = token(artesao, "artesao");
+        assertThat(chamar("PATCH", recusar, null, corpo).statusCode()).isEqualTo(401);
+        assertThat(chamar("PATCH", recusar, token(comprador, "comprador"), corpo).statusCode()).isEqualTo(403);
+        assertThat(chamar("PATCH", recusar, token(UUID.randomUUID(), "artesao"), corpo).statusCode())
+                .isEqualTo(403);
+        assertThat(chamar("PATCH", recusar, tokenArtesao, "{\"motivo\":\"não\"}").statusCode())
+                .isEqualTo(400);
+        var pendente = chamar("PATCH", recusar, tokenArtesao, corpo);
+        assertThat(pendente.statusCode()).isEqualTo(202);
+        assertThat(json.readTree(pendente.body()).path("dados").path("estado").asString())
+                .isEqualTo("reembolso_pendente");
+        assertThat(chamar("PATCH", recusar, tokenArtesao, corpo).statusCode()).isEqualTo(202);
+        org.mockito.Mockito.verify(catalogo, org.mockito.Mockito.never()).liberar(id, reserva);
+        when(provedor.pagamento(pagamentoId)).thenReturn(new CheckoutProClient.Pagamento(
+                pagamentoId, id.toString(), total, "BRL", "refunded", false, "ordem-" + id, total));
+        pagamentos.aplicarPagamento(pagamentoId);
+        assertThat(chamar("PATCH", recusar, tokenArtesao, corpo).statusCode()).isEqualTo(200);
+        assertThat(json.readTree(chamar("GET", "/api/v1/pedidos/" + id,
+                token(comprador, "comprador"), null).body()).path("dados").path("estado").asString())
+                .isEqualTo("recusado");
+        org.mockito.Mockito.verify(catalogo).liberar(id, reserva);
+
+        UUID segundo = pedidos.checkout(new PedidoService.Checkout(List.of(new PedidoService.Item(slug, 1)),
+                "padrao", "checkout_pro", Map.of("cep", "52021030", "endereco", "Rua",
+                        "cidade", "Recife", "estado", "PE")), comprador, slug + "-segundo");
+        pedidos.processar(segundo);
+        // Estado avançado é usado para verificar o contrato HTTP de mediação.
+        for (String estado : List.of("producao", "enviado", "entregue")) {
+            jdbc.update("UPDATE pedidos SET estado = ? WHERE id = ?", estado, segundo);
+            var mediacao = chamar("PATCH", "/api/v1/pedidos/" + segundo + "/cancelar",
+                    token(comprador, "comprador"), "{}");
+            assertThat(mediacao.statusCode()).isEqualTo(409);
+            assertThat(json.readTree(mediacao.body()).path("erro").path("codigo").asString())
+                    .isEqualTo("MEDIACAO_NECESSARIA");
+        }
+    }
+
     private HttpResponse<String> chamar(String metodo, String caminho, String token, String corpo) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + caminho))
                 .header("Content-Type", "application/json");
