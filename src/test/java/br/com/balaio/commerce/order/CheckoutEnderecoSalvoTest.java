@@ -1,49 +1,57 @@
 package br.com.balaio.commerce.order;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import br.com.balaio.commerce.payment.CheckoutProService;
-import java.time.Instant;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Supplier;
+
+import br.com.balaio.commerce.checkout.application.CheckoutService;
+import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase;
+import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.Checkout;
+import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.Item;
+import br.com.balaio.commerce.order.application.port.in.ComandosPedidoUseCase;
+import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase;
+import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase.Detalhe;
+import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase.Resumo;
+import br.com.balaio.commerce.order.application.port.in.ProcessarPedidosPendentesUseCase;
+import br.com.balaio.commerce.payment.application.port.in.PagamentoCheckoutUseCase;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.oauth2.jwt.Jwt;
 
 class CheckoutEnderecoSalvoTest {
     @Test
-    void checkoutConsultaEnderecoDoCompradorEUsaSnapshotResolvido() {
-        var pedidos = mock(PedidoService.class);
-        var pagamentos = mock(CheckoutProService.class);
-        var enderecos = mock(EnderecoSalvoClient.class);
-        var controller = new PedidosController(pedidos, pagamentos, enderecos, "");
+    void checkoutEncaminhaTokenDoCompradorApenasParaEnderecoSalvo() {
+        var pedidos = mock(CheckoutPedidoUseCase.class);
+        var consultas = mock(ConsultarPedidosUseCase.class);
+        var processamento = mock(ProcessarPedidosPendentesUseCase.class);
+        var pagamentos = mock(PagamentoCheckoutUseCase.class);
+        var checkout = new CheckoutService(pedidos, consultas, mock(ComandosPedidoUseCase.class),
+                processamento, pagamentos);
         UUID comprador = UUID.randomUUID();
         UUID enderecoId = UUID.randomUUID();
         UUID pedidoId = UUID.randomUUID();
-        var jwt = Jwt.withTokenValue("jwt-comprador").header("alg", "none")
-                .subject(comprador.toString()).claim("papel", "comprador")
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
-        var informado = Map.of("cep", "99999-999", "endereco", "Não confiável",
-                "cidade", "Outra", "estado", "SP");
-        var salvo = Map.of("cep", "50000-000", "endereco", "Rua A, 1, Boa Vista",
-                "cidade", "Recife", "estado", "PE");
-        when(enderecos.consultar(enderecoId, "jwt-comprador")).thenReturn(salvo);
-        when(pedidos.checkoutSalvo(any(), eq(comprador), eq("chave"), any())).thenAnswer(chamada -> {
-            @SuppressWarnings("unchecked")
-            Supplier<Map<String, String>> consulta = chamada.getArgument(3);
-            assertThat(consulta.get()).isEqualTo(salvo);
-            return pedidoId;
-        });
-        var comando = new PedidoService.Checkout(
-                List.of(new PedidoService.Item("vaso", 1)), "padrao", "checkout_pro", informado, enderecoId);
+        var comando = new Checkout(List.of(new Item("vaso", 1)), "padrao", "checkout_pro", Map.of(), enderecoId);
+        var resumo = new Resumo(pedidoId, comprador, UUID.randomUUID(), "vaso", OffsetDateTime.now(),
+                "aguardando_pagamento", BigDecimal.TEN, null, false, List.of(), List.of());
+        when(pedidos.checkoutSalvo(comando, comprador, "chave", "jwt-comprador")).thenReturn(pedidoId);
+        when(consultas.consultar(pedidoId, comprador)).thenReturn(new Detalhe(resumo, Map.of()));
 
-        controller.checkout(comando, "chave", jwt);
+        checkout.checkout(comando, comprador, "chave", "jwt-comprador");
 
-        verify(pedidos).checkoutSalvo(eq(comando), eq(comprador), eq("chave"), any());
+        var ordem = inOrder(pedidos, consultas, processamento, pagamentos);
+        ordem.verify(pagamentos).exigirDisponivel();
+        ordem.verify(pedidos).checkoutSalvo(comando, comprador, "chave", "jwt-comprador");
+        ordem.verify(processamento).processar(pedidoId);
+        ordem.verify(pagamentos).preparar(pedidoId);
+        ordem.verify(consultas).consultar(pedidoId, comprador);
+        ordem.verify(pagamentos).consultarPagamento(pedidoId, "aguardando_pagamento", BigDecimal.TEN);
         verify(pedidos, never()).checkout(any(), any(), any());
-        verify(enderecos).consultar(enderecoId, "jwt-comprador");
     }
 }

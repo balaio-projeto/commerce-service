@@ -2,18 +2,33 @@
 
 Sacola, pedidos, pagamento Checkout Pro em sandbox e frete demonstrativo. O serviço é independente, usa Java 25 e Spring Boot 4.1.1 e recebe requisições externas por meio do api-gateway.
 
-## Stack inicial
+## Stack
 
-- Spring MVC, Spring Data JPA e PostgreSQL
+- Spring MVC, JDBC e PostgreSQL
 - Flyway para migrações do banco próprio
 - Bean Validation
 - Spring Boot Actuator
+
+## Arquitetura
+
+- `cart` cuida da sacola, `order` cuida do pedido e da reserva, e `payment` cuida das preferências, notificações e conciliação. `checkout/application` compõe as portas de pedido e pagamento nos fluxos que precisam dos dois contextos.
+- Controllers e workers chamam portas de entrada. A aplicação usa portas de saída para persistência e serviços remotos. Regras puras ficam no domínio, SQL fica nos adapters JDBC e os clientes HTTP traduzem os contratos de catálogo, perfil e Mercado Pago.
+- A sacola consulta o catálogo antes da transação de substituição. A conciliação valida o pagamento no provedor e depois abre uma transação local para travar pedido e intenção, nesta ordem, e gravar o resultado financeiro e a transição. O trigger do PostgreSQL grava o histórico nessa mesma transação.
 
 ## Execução
 
 Porta HTTP padrão: 8083. Para executar pela IDE, defina `COMMERCE_SERVICE_PORT` (opcional), `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` e `SPRING_DATASOURCE_PASSWORD`. O banco e suas credenciais são configurados no repositório `platform`.
 
-No Windows: `.\mvnw.cmd spring-boot:run`. Testes: `.\mvnw.cmd test`.
+No Windows, inicie com `.\mvnw.cmd spring-boot:run` e rode `.\mvnw.cmd test` para a suíte sem Docker.
+
+Rode a suíte completa com Java 25, Docker e PostgreSQL 18 via Testcontainers.
+
+```powershell
+$env:COMMERCE_POSTGRES_TEST='true'
+.\mvnw.cmd -B clean verify
+```
+
+No Linux, use `COMMERCE_POSTGRES_TEST=true ./mvnw -B clean verify`.
 
 O `Dockerfile` constrói uma imagem própria. Em `platform`, use `docker compose up --build -d commerce-service` para iniciar este serviço e seu banco ou `docker compose --profile extended up --build -d` para iniciar todos. Health: `http://localhost:8083/actuator/health`.
 
@@ -47,13 +62,15 @@ Medição local em 17/11/2026: Compose `extended` com PostgreSQL 18 e catálogo 
 
 ## PI-54: Checkout Pro em sandbox
 
-`POST /api/v1/checkout` exige JWT de comprador e `Idempotency-Key`. Aceita `itens: [{slug, quantidade}]`, `freteId: "padrao"`, `meio: "checkout_pro"` e `endereco` com `cep`, `endereco`, `cidade` e `estado`. A resposta 202 mantém `{dados,erro}` e inclui `checkoutUrl` apenas quando a preferência está pronta. O preço dos itens, o frete demonstrativo de R$ 38,90 e o total são calculados no commerce; o catálogo fornece a cotação e reserva peças únicas por API interna. Encomendas não usam reserva exclusiva.
+`POST /api/v1/checkout` exige JWT de comprador e `Idempotency-Key`. Aceita `itens: [{slug, quantidade}]`, `freteId: "padrao"`, `meio: "checkout_pro"` e `endereco` com `cep`, `endereco`, `cidade` e `estado`. A resposta 202 mantém `{dados,erro}`. O campo `checkoutUrl` fica nulo até a preferência estar pronta e só tem valor enquanto o pedido aguarda pagamento. O commerce calcula o preço dos itens, o frete demonstrativo de R$ 38,90 e o total. O catálogo fornece a cotação e reserva peças únicas por API interna. Encomendas não usam reserva exclusiva.
 
 O commerce persiste o pedido antes de reservar e cria uma intenção local antes de chamar `POST /checkout/preferences`. A mesma chave e payload retornam o mesmo pedido e URL; payload divergente recebe 409. A cotação e os comandos remotos de reserva ocorrem fora da transação local; um lease no pedido impede workers simultâneos e expira após falha do processo. Depois de um timeout ambíguo, a intenção fica pendente e o worker consulta `GET /checkout/preferences/search` pela `external_reference` antes de vincular a preferência encontrada. Se a busca não encontrar resultado, ele **não repete o POST** automaticamente, para impedir segunda cobrança. Esse caso exige conciliação operacional. A preferência expira após 13 minutos; depois de 16 minutos sem pagamento na busca autenticada, o commerce inicia a liberação da reserva. A reserva do catálogo expira em 15 minutos.
 
 `POST /api/v1/pagamentos/mercado-pago/notificacoes` recebe somente notificações `payment` com HMAC válida. A notificação é gravada antes do HTTP 200; o worker consulta `GET /v1/payments/{id}` e `GET /merchant_orders/{id}` com o token de teste e verifica referência, preferência, valor, moeda e `live_mode=false`. O antigo endpoint interno de pagamento simulado foi removido. Redirect, query string e retorno do navegador não mudam o estado financeiro. Status `approved` inicia confirmação da reserva; `pending`, `in_process`, `authorized`, `in_mediation` e estados desconhecidos não encerram o pedido; `rejected`, `cancelled` e `expired` iniciam liberação. Cobrança aprovada após encerramento inicia reembolso pendente, sem marcar venda concluída.
 
-`PATCH /api/v1/pedidos/{id}/cancelar` exige o comprador e `/recusar` exige o artesão titular. Cancelamento após início da produção retorna 409 `MEDIACAO_NECESSARIA`. Os endpoints retornam 202 enquanto aguardam cancelamento, reembolso ou liberação. Cancelamento de pagamento pendente usa `PUT /v1/payments/{id}` com `status=cancelled` quando há payment ID; sem pagamento identificado, aguarda expiração e consulta autenticada antes de encerrar. Pedido aprovado passa por `reembolso_pendente` e usa `POST /v1/payments/{id}/refunds` com chave idempotente. Somente `refunded` ou valor integral confirmado pelo provedor permite avançar para `encerramento_pendente`; a liberação da reserva pelo catálogo precisa retornar `LIBERADA` ou `EXPIRADA` antes do estado terminal. A causa permanece `cancelado` ou `recusado` após o estorno; a decisão `cancelar_reembolsar` da mediação mantém sua própria causa persistida. A migration V5 conserva o valor reembolsado informado pelo provedor para que `estadoPagamento` indique `refunded` também quando o status bruto ainda é `approved` após estorno integral; leituras posteriores antigas (`approved` com valor zero ou `pending`) não reduzem o valor reembolsado nem reabrem pedidos já estornados, enquanto aprovação tardia sem estorno anterior ainda encaminha para `reembolso_pendente`. Repetir um encerramento igual devolve o estado atual, e conflito de causa retorna 409. Falha de rede mantém estado pendente e é reprocessada, inclusive por item único já parcialmente liberado. O sandbox pode recusar cancelamento ou reembolso conforme o método e estado do pagamento; o serviço não promete conclusão antecipada. Não há retenção nem repasse ao artesão nesta integração.
+`PATCH /api/v1/pedidos/{id}/cancelar` exige o comprador e `/recusar` exige o artesão titular. Cancelamento após início da produção retorna 409 `MEDIACAO_NECESSARIA`. Os endpoints retornam 202 enquanto aguardam cancelamento, reembolso ou liberação. Cancelamento de pagamento pendente usa `PUT /v1/payments/{id}` com `status=cancelled` quando há payment ID. O commerce pode iniciar a liberação assim que confirma a ausência de intenção sob lock. Quando a intenção está pronta e ainda não tem cobrança vinculada, o cancelamento exige uma busca autenticada vazia e 14 minutos desde a atualização do pedido. O commerce confere novamente o estado, o prazo e a cobrança vinculada sob lock antes de avançar. Intenções `CRIANDO` passam pela recuperação por `external_reference` antes da liberação.
+
+Pedido aprovado passa por `reembolso_pendente` e usa `POST /v1/payments/{id}/refunds` com chave idempotente. Somente `refunded` ou valor integral confirmado pelo provedor permite avançar para `encerramento_pendente`. A liberação da reserva pelo catálogo precisa retornar `LIBERADA` ou `EXPIRADA` antes do estado terminal. A causa permanece `cancelado` ou `recusado` após o estorno, e a decisão `cancelar_reembolsar` da mediação mantém sua própria causa persistida. A migration V5 conserva o valor reembolsado informado pelo provedor para que `estadoPagamento` indique `refunded` também quando o status bruto ainda é `approved` após estorno integral. Leituras posteriores antigas (`approved` com valor zero ou `pending`) não reduzem o valor reembolsado nem reabrem pedidos já estornados. Aprovação tardia sem estorno anterior segue para `reembolso_pendente`. Repetir um encerramento igual devolve o estado atual, e conflito de causa retorna 409. Falha de rede mantém estado pendente e é reprocessada, inclusive por item único já parcialmente liberado. O sandbox pode recusar cancelamento ou reembolso conforme o método e estado do pagamento; o serviço não promete conclusão antecipada. Não há retenção nem repasse ao artesão nesta integração.
 
 `GET /api/v1/pedidos` lista somente os pedidos do comprador do JWT. Para o ateliê, `GET /api/v1/artesao/pedidos-pendentes` lista apenas pedidos `confirmado` com `id`, `pecaSlug`, `comprador`, `quando` e `valor`; `GET /api/v1/artesao/vendas` retorna pedidos pagos ainda ativos para as métricas e vendas. Ambas exigem JWT de artesão e filtram pelo `sub` validado, ignorando qualquer `artesao` informado na query. O nome do comprador aparece como rótulo genérico até existir contrato de consulta de perfil para este dado.
 
@@ -64,5 +81,3 @@ O detalhe do comprador inclui os itens (slug, quantidade e preço cotado), ender
 Para ativar o pagamento sandbox, defina `MERCADOPAGO_ENVIRONMENT=sandbox`, `MERCADOPAGO_ACCESS_TOKEN` de teste, `MERCADOPAGO_WEBHOOK_SECRET`, `MERCADOPAGO_NOTIFICATION_URL` HTTPS pública e `FRONTEND_RETURN_URL` HTTPS pública. A API do provedor permanece `https://api.mercadopago.com` com credenciais de teste. Sem essas variáveis, o serviço inicia sem conexão externa e `POST /api/v1/checkout` retorna 503 antes de criar pedido. Configuração parcial ou de produção impede a inicialização. A URL devolvida ao navegador deve pertencer a `sandbox.mercadopago.com`. Não se armazenam cartão, CVV, token de provedor ou segredo no pedido ou frontend. O roteiro de validação manual está em `docs/PI-54-checkout-pro-sandbox.md`.
 
 Contratos conferidos na [Preferences API](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/create-preference/post), [webhooks](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/additional-content/notifications/webhooks), [consulta de pagamento](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/get-payment/get), [pedido comercial](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/merchant-orders/get-merchant-order/get) e [reembolsos/cancelamentos](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/additional-settings/refunds-and-cancellations).
-
-Para testar com PostgreSQL 18 via Testcontainers: `$env:COMMERCE_POSTGRES_TEST='true'; .\mvnw.cmd '-Djava.version=21' clean verify`.
