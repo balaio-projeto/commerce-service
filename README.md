@@ -17,6 +17,22 @@ No Windows: `.\mvnw.cmd spring-boot:run`. Testes: `.\mvnw.cmd test`.
 
 O `Dockerfile` constrói uma imagem própria. Em `platform`, use `docker compose up --build -d commerce-service` para iniciar este serviço e seu banco ou `docker compose --profile extended up --build -d` para iniciar todos. Health: `http://localhost:8083/actuator/health`.
 
+A especificação OpenAPI do serviço fica em `http://localhost:8083/v3/api-docs`.
+
+## PI-189: endereço salvo no checkout
+
+`POST /api/v1/checkout` aceita `enderecoId` como alternativa ao endereço digitado. Quando o campo vem preenchido, o commerce consulta `GET /api/v1/usuario/enderecos/{id}` no profile-service com o JWT do comprador e grava um snapshot dos dados retornados no pedido. Os campos `endereco` enviados junto com o id são ignorados.
+
+A consulta acontece depois da checagem de idempotência. Repetir um checkout já criado devolve o mesmo pedido sem consultar o profile, então o pedido não depende de o endereço salvo continuar existindo. Editar ou remover o endereço depois da compra não altera o snapshot.
+
+| Situação | Resposta |
+|---|---|
+| Endereço de outro comprador ou inexistente | 404 `ENDERECO_NAO_ENCONTRADO` |
+| Endereço sem cidade e estado no campo `bairro` | 422 `ENDERECO_INCOMPLETO` |
+| Profile-service indisponível ou com erro | 503 `PERFIL_INDISPONIVEL` |
+
+Variável: `PROFILE_SERVICE_URL` (padrão `http://localhost:8082`). O commerce não lê o banco do profile.
+
 ## PI-187: sacola do comprador
 
 `GET /api/v1/estado/sacola` devolve `{dados:[{slug,quantidade}],erro:null}` para o comprador autenticado; sem itens, `dados` é `[]`. `PUT /api/v1/estado/sacola` recebe `{sacola:[{slug,quantidade}]}` e substitui atomicamente as linhas da conta do `sub` no JWT. Não aceita identidade nem preço no corpo. Quantidades válidas são 1 a 3, e peça única aceita somente 1. O commerce valida slug, preço atual e disponibilidade pela cotação HTTP interna do catálogo. A sacola não cria reserva nem congela preço; o checkout faz nova cotação antes de reservar.
