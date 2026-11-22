@@ -1,6 +1,7 @@
 package br.com.balaio.commerce.cart;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -16,6 +17,7 @@ import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
@@ -30,6 +32,8 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -37,9 +41,12 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import br.com.balaio.commerce.order.CatalogoCliente;
+import br.com.balaio.commerce.integration.catalogo.CatalogoCliente;
+import br.com.balaio.commerce.cart.application.port.out.SacolaRepository;
+import br.com.balaio.commerce.cart.domain.ItemSacola;
 
 @EnabledIfEnvironmentVariable(named = "COMMERCE_POSTGRES_TEST", matches = "true")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
@@ -55,9 +62,32 @@ class SacolaIntegrationTest {
 
     @Value("${local.server.port}") int porta;
     @Autowired JdbcTemplate jdbc;
+    @Autowired SacolaRepository sacolas;
     @MockitoBean CatalogoCliente catalogo;
     @MockitoBean JwtDecoder decoder;
     private final HttpClient http = HttpClient.newHttpClient();
+
+    @Test
+    void consultaCatalogoForaDaTransacaoERestauraSacolaSeEscritaFalhar() throws Exception {
+        UUID comprador = UUID.randomUUID();
+        var itemOriginal = new ItemSacola("peca-valida", 1);
+        when(decoder.decode("transacao-sacola")).thenReturn(jwt("transacao-sacola", comprador, "comprador"));
+        when(catalogo.cotar("peca-valida")).thenAnswer(chamada -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return new CatalogoCliente.Cotacao("peca-valida", BigDecimal.TEN, "unica", "atelie", null);
+        });
+
+        assertThat(chamar("PUT", "transacao-sacola", """
+                {"sacola":[{"slug":"peca-valida","quantidade":1}]}
+                """).statusCode()).isEqualTo(200);
+        assertThat(revalidar("transacao-sacola", "{}").statusCode()).isEqualTo(200);
+
+        assertThat(AopUtils.isAopProxy(sacolas)).isTrue();
+        assertThatThrownBy(() -> sacolas.substituir(comprador,
+                List.of(new ItemSacola("primeira-peca", 1), new ItemSacola("quantidade-invalida", 4))))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(sacolas.consultar(comprador)).containsExactly(itemOriginal);
+    }
 
     private Jwt jwt(String token, UUID comprador, String papel) {
         return Jwt.withTokenValue(token).header("alg", "RS256").subject(comprador.toString())
@@ -144,7 +174,7 @@ class SacolaIntegrationTest {
         });
         servidor.start();
         try {
-            var cliente = new CatalogoCliente("http://127.0.0.1:" + servidor.getAddress().getPort(),
+            var cliente = new CatalogoCliente(org.springframework.web.client.RestClient.builder(), "http://127.0.0.1:" + servidor.getAddress().getPort(),
                     "token-interno-de-teste-123456789012");
             when(catalogo.cotar("z-malformada")).thenAnswer(chamada -> cliente.cotar(chamada.getArgument(0)));
             for (String resposta : new String[] {

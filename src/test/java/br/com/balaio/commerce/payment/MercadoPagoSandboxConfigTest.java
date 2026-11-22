@@ -1,5 +1,7 @@
 package br.com.balaio.commerce.payment;
 
+import br.com.balaio.commerce.payment.integration.MercadoPagoSandboxConfig;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
