@@ -9,6 +9,7 @@ spring:
       ddl-auto: validate
 balaio:
   catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  profile-url: ${PROFILE_SERVICE_URL:http://localhost:8082}
   internal-token: ${BALAIO_INTERNAL_TOKEN:}
   jwt:
     public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}

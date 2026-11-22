@@ -58,7 +58,12 @@ public class PedidoService {
     }
 
     public record Item(String slug, Integer quantidade) { }
-    public record Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco) { }
+    public record Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco,
+            UUID enderecoId) {
+        public Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco) {
+            this(itens, freteId, meio, endereco, null);
+        }
+    }
 
     public UUID checkout(Checkout comando, UUID comprador, String chave) {
         validarChave(comprador, chave);
@@ -68,6 +73,20 @@ public class PedidoService {
         validarComando(comando);
         ItensCotados cotacao = cotarItens(comando.itens());
         return persistir(comando, comprador, chave, fingerprint, cotacao);
+    }
+
+    public UUID checkoutSalvo(Checkout comando, UUID comprador, String chave,
+            java.util.function.Supplier<Map<String, String>> consultarEndereco) {
+        validarChave(comprador, chave);
+        if (comando == null || comando.enderecoId() == null) throw comandoInvalido();
+        String fingerprint = fingerprint(comando);
+        UUID existente = transacoes.execute(status -> buscarCheckoutExistente(comprador, chave, fingerprint));
+        if (existente != null) return existente;
+        Checkout resolvido = new Checkout(comando.itens(), comando.freteId(), comando.meio(),
+                consultarEndereco.get(), comando.enderecoId());
+        validarComando(resolvido);
+        ItensCotados cotacao = cotarItens(resolvido.itens());
+        return persistir(resolvido, comprador, chave, fingerprint, cotacao);
     }
 
     private void validarChave(UUID comprador, String chave) {
@@ -449,7 +468,13 @@ public class PedidoService {
     private boolean vazio(String texto) { return texto == null || texto.isBlank(); }
     private String fingerprint(Checkout comando) {
         try {
-            byte[] dados = json.writeValueAsBytes(comando);
+            if (comando == null) throw comandoInvalido();
+            Object identidade = comando.enderecoId() == null
+                    ? new FingerprintEnderecoManual(comando.itens(), comando.freteId(),
+                            comando.meio(), comando.endereco())
+                    : new FingerprintEnderecoSalvo(comando.itens(), comando.freteId(),
+                            comando.meio(), comando.enderecoId());
+            byte[] dados = json.writeValueAsBytes(identidade);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(dados));
         } catch (JacksonException | NoSuchAlgorithmException exception) {
             throw erro(400, "REQUISICAO_INVALIDA", "Checkout inválido.");
@@ -459,6 +484,9 @@ public class PedidoService {
         return new PedidoException(status, codigo, mensagem);
     }
     private record ItemCotado(String slug, int quantidade, BigDecimal preco, String disponibilidade) { }
+    private record FingerprintEnderecoManual(List<Item> itens, String freteId, String meio,
+            Map<String, String> endereco) { }
+    private record FingerprintEnderecoSalvo(List<Item> itens, String freteId, String meio, UUID enderecoId) { }
     private record ItensCotados(UUID artesao, BigDecimal total, List<ItemCotado> itens) { }
     private record ItemLinha(String slug, int quantidade, BigDecimal preco, String disponibilidade,
                              UUID reservaId, String reservaEstado) { }
