@@ -7,13 +7,32 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  mail:
+    host: ${COMMERCE_SMTP_HOST:localhost}
+    port: ${COMMERCE_SMTP_PORT:1025}
+    username: ${COMMERCE_SMTP_USERNAME:}
+    password: ${COMMERCE_SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${COMMERCE_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${COMMERCE_SMTP_STARTTLS:false}
+      mail.smtp.starttls.required: ${COMMERCE_SMTP_STARTTLS:false}
+      mail.smtp.ssl.checkserveridentity: true
+      mail.smtp.connectiontimeout: ${COMMERCE_SMTP_CONNECTION_TIMEOUT:5000}
+      mail.smtp.timeout: ${COMMERCE_SMTP_READ_TIMEOUT:10000}
+      mail.smtp.writetimeout: ${COMMERCE_SMTP_WRITE_TIMEOUT:10000}
 balaio:
   catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  profile-url: ${PROFILE_SERVICE_URL:http://localhost:8082}
   internal-token: ${BALAIO_INTERNAL_TOKEN:}
   jwt:
     public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
     issuer: ${JWT_ISSUER:}
     audience: ${JWT_AUDIENCE:}
+  mail:
+    from: ${COMMERCE_MAIL_FROM:nao-responda@localhost}
+    frontend-url: ${COMMERCE_FRONTEND_BASE_URL:http://localhost:4321}
+  painel:
+    catalogo-timeout-ms: ${COMMERCE_PAINEL_CATALOGO_TIMEOUT_MS:800}
 payment:
   mercadopago:
     environment: ${MERCADOPAGO_ENVIRONMENT:}
@@ -22,7 +41,22 @@ payment:
     webhook-secret: ${MERCADOPAGO_WEBHOOK_SECRET:}
     notification-url: ${MERCADOPAGO_NOTIFICATION_URL:}
     frontend-return-url: ${FRONTEND_RETURN_URL:}
+frete:
+  melhor-envio:
+    base-url: ${MELHORENVIO_BASE_URL:https://sandbox.melhorenvio.com.br}
+    token: ${MELHORENVIO_TOKEN:}
+    cep-origem: ${MELHORENVIO_CEP_ORIGEM:50030230}
+    user-agent: ${MELHORENVIO_USER_AGENT:Balaio homologacao}
+    servicos: ${MELHORENVIO_SERVICOS:}
+  pacote:
+    altura-cm: ${FRETE_PACOTE_ALTURA_CM:15}
+    largura-cm: ${FRETE_PACOTE_LARGURA_CM:20}
+    comprimento-cm: ${FRETE_PACOTE_COMPRIMENTO_CM:25}
+    peso-kg: ${FRETE_PACOTE_PESO_KG:1.0}
 management:
+  health:
+    mail:
+      enabled: false
   endpoints:
     web:
       exposure:
