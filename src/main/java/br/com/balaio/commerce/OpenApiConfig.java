@@ -13,7 +13,7 @@ class OpenApiConfig {
     OpenAPI commerceOpenApi() {
         return new OpenAPI()
                 .info(new Info().title("Balaio commerce-service")
-                        .description("Sacola, frete, checkout, pedidos e pagamentos (Mercado Pago sandbox).")
+                        .description("Sacola, frete, checkout, pedidos e pagamentos (Mercado Pago).")
                         .version("v1"))
                 .components(new Components().addSecuritySchemes("bearer-jwt", new SecurityScheme()
                         .type(SecurityScheme.Type.HTTP).scheme("bearer").bearerFormat("JWT")));

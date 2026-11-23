@@ -23,7 +23,7 @@ public class ProvedorFreteConfig {
             @Value("${frete.pacote.comprimento-cm:25}") int comprimento,
             @Value("${frete.pacote.peso-kg:1.0}") BigDecimal peso) {
         if (token == null || token.isBlank()) return new FreteFixoDemonstrativo();
-        return new MelhorEnvioSandboxClient(builder, baseUrl, token.trim(), cepOrigem, userAgent, servicos,
-                new MelhorEnvioSandboxClient.Pacote(altura, largura, comprimento, peso));
+        return new MelhorEnvioClient(builder, baseUrl, token.trim(), cepOrigem, userAgent, servicos,
+                new MelhorEnvioClient.Pacote(altura, largura, comprimento, peso));
     }
 }

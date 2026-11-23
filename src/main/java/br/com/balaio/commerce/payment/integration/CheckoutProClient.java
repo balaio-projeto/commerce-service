@@ -24,9 +24,9 @@ import tools.jackson.databind.JsonNode;
 @Component
 public class CheckoutProClient implements PagamentoGateway {
     private final RestClient http;
-    private final MercadoPagoSandboxConfig config;
+    private final MercadoPagoConfig config;
 
-    public CheckoutProClient(RestClient.Builder builder, MercadoPagoSandboxConfig config) {
+    public CheckoutProClient(RestClient.Builder builder, MercadoPagoConfig config) {
         this.config = config;
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(2));
@@ -129,12 +129,12 @@ public class CheckoutProClient implements PagamentoGateway {
                 || (!p.path("external_reference").isMissingNode()
                     && !referencia.equals(p.path("external_reference").asText())))
             throw new IllegalStateException("Preferência do Mercado Pago inválida.");
-        String url = p.path("sandbox_init_point").asText();
+        String url = p.path(config.campoUrlCheckout()).asText();
         URI destino = URI.create(url);
-        if (!"https".equals(destino.getScheme()) || !"sandbox.mercadopago.com".equals(destino.getHost())
+        if (!"https".equals(destino.getScheme()) || !config.hostCheckoutPermitido(destino.getHost())
                 || destino.getUserInfo() != null || destino.getQuery() == null
                 || !destino.getQuery().contains("pref_id="))
-            throw new IllegalStateException("URL sandbox da preferência inválida.");
+            throw new IllegalStateException("URL de checkout da preferência inválida.");
         return new Preferencia(p.path("id").asText(), url);
     }
 }
