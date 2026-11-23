@@ -3,7 +3,7 @@ package br.com.balaio.commerce.payment.api;
 import java.time.Duration;
 
 import br.com.balaio.commerce.payment.application.port.in.RegistrarNotificacaoUseCase;
-import br.com.balaio.commerce.payment.integration.MercadoPagoSandboxConfig;
+import br.com.balaio.commerce.payment.integration.MercadoPagoConfig;
 import com.mercadopago.exceptions.MPInvalidWebhookSignatureException;
 import com.mercadopago.webhook.WebhookSignatureValidator;
 
@@ -19,9 +19,9 @@ import tools.jackson.databind.JsonNode;
 @RestController
 public class PaymentWebhookController {
     private final RegistrarNotificacaoUseCase pagamentos;
-    private final MercadoPagoSandboxConfig config;
+    private final MercadoPagoConfig config;
 
-    public PaymentWebhookController(RegistrarNotificacaoUseCase pagamentos, MercadoPagoSandboxConfig config) {
+    public PaymentWebhookController(RegistrarNotificacaoUseCase pagamentos, MercadoPagoConfig config) {
         this.pagamentos = pagamentos;
         this.config = config;
     }
@@ -43,7 +43,8 @@ public class PaymentWebhookController {
         }
         if (aviso == null || !"payment".equals(aviso.path("type").asText())
                 || !dataId.equals(aviso.path("data").path("id").asText())
-                || aviso.path("live_mode").asBoolean(true))
+                || !aviso.path("live_mode").isBoolean()
+                || aviso.path("live_mode").asBoolean() != config.producao())
             throw new WebhookInvalido(false);
         pagamentos.registrarNotificacao(requestId, dataId);
         return ResponseEntity.ok().build();

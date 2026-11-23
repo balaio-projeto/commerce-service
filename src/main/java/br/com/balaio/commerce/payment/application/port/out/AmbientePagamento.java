@@ -1,5 +1,7 @@
 package br.com.balaio.commerce.payment.application.port.out;
 
-public interface PagamentoSandbox {
+public interface AmbientePagamento {
     boolean enabled();
+
+    boolean producao();
 }

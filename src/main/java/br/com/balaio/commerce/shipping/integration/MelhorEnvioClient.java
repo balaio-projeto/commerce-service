@@ -21,25 +21,32 @@ import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
 import tools.jackson.databind.JsonNode;
 
-public class MelhorEnvioSandboxClient implements ProvedorFrete {
-    public static final String PROVEDOR = "melhor_envio_sandbox";
+public class MelhorEnvioClient implements ProvedorFrete {
+    public static final String PROVEDOR_SANDBOX = "melhor_envio_sandbox";
+    public static final String PROVEDOR_PRODUCAO = "melhor_envio";
     public static final String PREFIXO_ID = "me-";
     private static final Pattern ID_OPCAO = Pattern.compile("me-[0-9]{1,6}");
-    private static final Set<String> HOSTS_PERMITIDOS = Set.of("sandbox.melhorenvio.com.br", "localhost", "127.0.0.1");
+    private static final Set<String> HOSTS_SANDBOX = Set.of("sandbox.melhorenvio.com.br", "localhost", "127.0.0.1");
+    private static final Set<String> HOSTS_PRODUCAO = Set.of("melhorenvio.com.br", "www.melhorenvio.com.br");
 
     public record Pacote(int alturaCm, int larguraCm, int comprimentoCm, BigDecimal pesoKg) { }
 
     private final RestClient http;
+    private final String provedor;
     private final String token;
     private final String cepOrigem;
     private final String servicos;
     private final Pacote pacote;
 
-    public MelhorEnvioSandboxClient(RestClient.Builder builder, String baseUrl, String token, String cepOrigem, String userAgent,
+    public MelhorEnvioClient(RestClient.Builder builder, String baseUrl, String token, String cepOrigem, String userAgent,
             String servicos, Pacote pacote) {
-        String host = URI.create(baseUrl).getHost();
-        if (host == null || !HOSTS_PERMITIDOS.contains(host))
-            throw new IllegalStateException("Melhor Envio aceita apenas o ambiente sandbox.");
+        URI endereco = URI.create(baseUrl);
+        String host = endereco.getHost();
+        boolean producao = host != null && HOSTS_PRODUCAO.contains(host);
+        if (host == null || (!producao && !HOSTS_SANDBOX.contains(host)))
+            throw new IllegalStateException("Melhor Envio aceita apenas os endereços oficiais de sandbox ou produção.");
+        if (producao && !"https".equals(endereco.getScheme()))
+            throw new IllegalStateException("Melhor Envio em produção exige HTTPS.");
         if (cepOrigem == null || !cepOrigem.replaceAll("\\D", "").matches("[0-9]{8}"))
             throw new IllegalStateException("CEP de origem do frete inválido.");
         var factory = new SimpleClientHttpRequestFactory();
@@ -47,6 +54,7 @@ public class MelhorEnvioSandboxClient implements ProvedorFrete {
         factory.setReadTimeout(Duration.ofSeconds(5));
         this.http = builder.baseUrl(baseUrl).requestFactory(factory)
                 .defaultHeader("User-Agent", userAgent).build();
+        this.provedor = producao ? PROVEDOR_PRODUCAO : PROVEDOR_SANDBOX;
         this.token = token;
         this.cepOrigem = cepOrigem.replaceAll("\\D", "");
         this.servicos = servicos == null ? "" : servicos.trim();
@@ -55,7 +63,7 @@ public class MelhorEnvioSandboxClient implements ProvedorFrete {
 
     @Override
     public String provedor() {
-        return PROVEDOR;
+        return provedor;
     }
 
     @Override
@@ -89,7 +97,7 @@ public class MelhorEnvioSandboxClient implements ProvedorFrete {
             opcoes.add(new OpcaoFrete(PREFIXO_ID + servico.path("id").asString(),
                     transportadora.isBlank() ? nome : transportadora + " " + nome,
                     OpcaoFrete.prazoEmTexto(minimo, maximo), minimo, maximo, valor,
-                    transportadora.isBlank() ? null : transportadora, PROVEDOR));
+                    transportadora.isBlank() ? null : transportadora, provedor));
         }
         opcoes.sort((a, b) -> a.valor().compareTo(b.valor()));
         return opcoes;

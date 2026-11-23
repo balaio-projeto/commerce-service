@@ -7,7 +7,7 @@ import br.com.balaio.commerce.payment.application.port.in.PagamentoCheckoutUseCa
 import br.com.balaio.commerce.payment.application.port.in.ReconciliarPagamentosUseCase;
 import br.com.balaio.commerce.payment.application.port.out.PagamentoGateway;
 import br.com.balaio.commerce.payment.application.port.out.PagamentoRepository;
-import br.com.balaio.commerce.payment.application.port.out.PagamentoSandbox;
+import br.com.balaio.commerce.payment.application.port.out.AmbientePagamento;
 import br.com.balaio.commerce.payment.domain.ResultadoFinanceiro;
 
 import java.math.BigDecimal;
@@ -23,11 +23,11 @@ public class CheckoutProService implements RegistrarNotificacaoUseCase, Pagament
     private final PagamentoRepository repositorio;
     private final TransactionTemplate transacoes;
     private final PagamentoGateway provedor;
-    private final PagamentoSandbox config;
+    private final AmbientePagamento config;
     private final PedidoParaPagamento pedidos;
 
     public CheckoutProService(PagamentoRepository repositorio, TransactionTemplate transacoes, PagamentoGateway provedor,
-            PagamentoSandbox config, PedidoParaPagamento pedidos) {
+            AmbientePagamento config, PedidoParaPagamento pedidos) {
         this.repositorio = repositorio;
         this.transacoes = transacoes;
         this.provedor = provedor;
@@ -111,9 +111,9 @@ public class CheckoutProService implements RegistrarNotificacaoUseCase, Pagament
         try { pedidoId = UUID.fromString(pagamento.referencia()); }
         catch (RuntimeException invalid) { throw new IllegalStateException("Referência de pagamento inválida."); }
         var intencao = repositorio.buscarIntencao(pedidoId);
-        if (intencao == null || !"PRONTA".equals(intencao.estado()) || pagamento.liveMode()
+        if (intencao == null || !"PRONTA".equals(intencao.estado()) || pagamento.liveMode() != config.producao()
                 || !"BRL".equals(pagamento.moeda()) || pagamento.ordemId().isBlank())
-            throw new IllegalStateException("Pagamento não pertence a uma intenção sandbox pronta.");
+            throw new IllegalStateException("Pagamento não pertence a uma intenção pronta deste ambiente.");
         PagamentoGateway.Ordem ordem = provedor.ordem(pagamento.ordemId());
         if (!intencao.preferenciaId().equals(ordem.preferenciaId())
                 || !pedidoId.toString().equals(ordem.referencia()))
