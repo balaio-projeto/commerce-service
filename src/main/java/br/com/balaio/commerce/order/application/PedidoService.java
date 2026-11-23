@@ -122,7 +122,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
     private FreteDoCheckout escolherFrete(Checkout comando, ItensCotados cotacao) {
         var itens = cotacao.itens().stream()
                 .map(item -> new FretePedido.ItemFrete(item.slug(), item.quantidade(), item.preco())).toList();
-        var escolhido = fretes.escolher(comando.freteId(), comando.endereco().get("cep"), itens);
+        var escolhido = fretes.escolher(comando.freteId(), comando.endereco().get("cep"), cotacao.artesao(), itens);
         return new FreteDoCheckout(escolhido.id(), escolhido.valor(), escolhido.snapshot());
     }
 

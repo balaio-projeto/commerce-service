@@ -19,7 +19,7 @@ public class FreteFixoDemonstrativo implements ProvedorFrete {
     }
 
     @Override
-    public List<OpcaoFrete> cotar(String cepDestino, List<VolumeFrete> volumes) {
+    public List<OpcaoFrete> cotar(String cepOrigemAtelie, String cepDestino, List<VolumeFrete> volumes) {
         return List.of(FreteDemonstrativo.opcao());
     }
 }

@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import br.com.balaio.commerce.shipping.application.FreteException;
 import br.com.balaio.commerce.shipping.application.FreteService;
+import br.com.balaio.commerce.shipping.application.port.out.PrecoPecasFrete;
 import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
 import br.com.balaio.commerce.shipping.integration.MelhorEnvioClient;
@@ -64,7 +66,7 @@ class MelhorEnvioClientTest {
                 + "{\"id\":1,\"name\":\"PAC\",\"price\":\"19.9\",\"delivery_time\":8,\"company\":{\"name\":\"Correios\"}}]");
         var cliente = cliente("1,2,17");
 
-        List<OpcaoFrete> opcoes = cliente.cotar("01310100", List.of(new VolumeFrete("jarra", 2, new BigDecimal("75.00")),
+        List<OpcaoFrete> opcoes = cliente.cotar(null, "01310100", List.of(new VolumeFrete("jarra", 2, new BigDecimal("75.00")),
                 new VolumeFrete("vaso", 1, new BigDecimal("30.00"))));
 
         assertThat(opcoes).extracting(OpcaoFrete::id).containsExactly("me-1", "me-2");
@@ -92,21 +94,35 @@ class MelhorEnvioClientTest {
     }
 
     @Test
+    void usaCepDoAtelieComoOrigemEVoltaAoPadraoQuandoAusenteOuInvalido() throws Exception {
+        var cliente = cliente("");
+        var volumes = List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN));
+        var json = JsonMapper.builder().build();
+
+        cliente.cotar("56800-000", "01310100", volumes);
+        assertThat(json.readTree(corpoRecebido.get()).path("from").path("postal_code").asString()).isEqualTo("56800000");
+        cliente.cotar(null, "01310100", volumes);
+        assertThat(json.readTree(corpoRecebido.get()).path("from").path("postal_code").asString()).isEqualTo("50030230");
+        cliente.cotar("123", "01310100", volumes);
+        assertThat(json.readTree(corpoRecebido.get()).path("from").path("postal_code").asString()).isEqualTo("50030230");
+    }
+
+    @Test
     void tokenRecusadoOuRespostaInvalidaViramFreteIndisponivelSemValorInventado() {
         var cliente = cliente("");
         status.set(401);
         resposta.set("{\"message\":\"Unauthenticated.\"}");
-        assertThatThrownBy(() -> cliente.cotar("01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN))))
+        assertThatThrownBy(() -> cliente.cotar(null, "01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN))))
                 .isInstanceOfSatisfying(FreteException.class, erro -> {
                     assertThat(erro.tipo()).isEqualTo(FreteException.Tipo.COTACAO_INDISPONIVEL);
                     assertThat(erro.codigo()).isEqualTo("FRETE_INDISPONIVEL");
                 });
         status.set(200);
         resposta.set("{\"inesperado\":true}");
-        assertThatThrownBy(() -> cliente.cotar("01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN))))
+        assertThatThrownBy(() -> cliente.cotar(null, "01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN))))
                 .isInstanceOf(FreteException.class);
         resposta.set("[{\"id\":1,\"name\":\"PAC\",\"error\":\"CEP de destino inválido\"}]");
-        assertThat(cliente.cotar("01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN)))).isEmpty();
+        assertThat(cliente.cotar(null, "01310100", List.of(new VolumeFrete("jarra", 1, BigDecimal.TEN)))).isEmpty();
     }
 
     @Test
@@ -129,25 +145,25 @@ class MelhorEnvioClientTest {
     void semTokenUsaCotacaoFixaIdentificadaEEscolhaGeraSnapshot() {
         var service = new FreteService(new ProvedorFreteConfig().provedorFrete(RestClient.builder(),
                 "https://sandbox.melhorenvio.com.br", "", "50030230", "Balaio", "", 15, 20, 25, BigDecimal.ONE),
-                slug -> BigDecimal.TEN);
+                slug -> new PrecoPecasFrete.PecaFrete(BigDecimal.TEN, null), artesao -> Optional.empty());
         assertThat(service.provedor()).isEqualTo("fixo_demonstrativo");
         assertThat(service.reconheceOpcao("padrao")).isTrue();
         assertThat(service.reconheceOpcao("me-1")).isFalse();
-        var escolha = service.escolher("padrao", "52021-030", List.of());
+        var escolha = service.escolher("padrao", "52021-030", null, List.of());
         assertThat(escolha.opcao().valor()).isEqualByComparingTo("38.90");
         assertThat(escolha.snapshot()).containsEntry("provedor", "fixo_demonstrativo").containsEntry("cepDestino", "52021030")
                 .containsKey("cotadoEm");
         assertThatThrownBy(() -> service.cotar("00000-000", List.of()))
                 .isInstanceOfSatisfying(FreteException.class, erro -> assertThat(erro.codigo()).isEqualTo("CEP_INVALIDO"));
-        assertThatThrownBy(() -> service.escolher("padrao", "5202103", List.of()))
+        assertThatThrownBy(() -> service.escolher("padrao", "5202103", null, List.of()))
                 .isInstanceOfSatisfying(FreteException.class,
                         erro -> assertThat(erro.tipo()).isEqualTo(FreteException.Tipo.CEP_INVALIDO));
         var comToken = new FreteService(new ProvedorFreteConfig().provedorFrete(RestClient.builder(),
                 "http://127.0.0.1:" + servidor.getAddress().getPort(), "token", "50030230",
-                "Balaio", "", 15, 20, 25, BigDecimal.ONE), slug -> BigDecimal.TEN);
+                "Balaio", "", 15, 20, 25, BigDecimal.ONE), slug -> new PrecoPecasFrete.PecaFrete(BigDecimal.TEN, null), artesao -> Optional.empty());
         assertThat(comToken.provedor()).isEqualTo("melhor_envio_sandbox");
         resposta.set("[{\"id\":1,\"name\":\"PAC\",\"price\":\"20.00\",\"delivery_time\":5}]");
-        assertThatThrownBy(() -> comToken.escolher("me-2", "01310100", List.of()))
+        assertThatThrownBy(() -> comToken.escolher("me-2", "01310100", null, List.of()))
                 .isInstanceOfSatisfying(FreteException.class, erro -> {
                     assertThat(erro.tipo()).isEqualTo(FreteException.Tipo.OPCAO_INDISPONIVEL);
                     assertThat(erro.codigo()).isEqualTo("FRETE_INDISPONIVEL");

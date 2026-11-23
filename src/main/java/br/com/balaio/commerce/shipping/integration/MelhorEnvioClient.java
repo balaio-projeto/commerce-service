@@ -17,6 +17,7 @@ import org.springframework.web.client.RestClientException;
 
 import br.com.balaio.commerce.shipping.application.FreteException;
 import br.com.balaio.commerce.shipping.application.port.out.ProvedorFrete;
+import br.com.balaio.commerce.shipping.domain.Cep;
 import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
 import tools.jackson.databind.JsonNode;
@@ -34,7 +35,7 @@ public class MelhorEnvioClient implements ProvedorFrete {
     private final RestClient http;
     private final String provedor;
     private final String token;
-    private final String cepOrigem;
+    private final String cepOrigemPadrao;
     private final String servicos;
     private final Pacote pacote;
 
@@ -56,7 +57,7 @@ public class MelhorEnvioClient implements ProvedorFrete {
                 .defaultHeader("User-Agent", userAgent).build();
         this.provedor = producao ? PROVEDOR_PRODUCAO : PROVEDOR_SANDBOX;
         this.token = token;
-        this.cepOrigem = cepOrigem.replaceAll("\\D", "");
+        this.cepOrigemPadrao = cepOrigem.replaceAll("\\D", "");
         this.servicos = servicos == null ? "" : servicos.trim();
         this.pacote = pacote;
     }
@@ -72,13 +73,13 @@ public class MelhorEnvioClient implements ProvedorFrete {
     }
 
     @Override
-    public List<OpcaoFrete> cotar(String cepDestino, List<VolumeFrete> volumes) {
+    public List<OpcaoFrete> cotar(String cepOrigemAtelie, String cepDestino, List<VolumeFrete> volumes) {
         JsonNode resposta;
         try {
             resposta = http.post().uri("/api/v2/me/shipment/calculate")
                     .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON)
                     .headers(headers -> headers.setBearerAuth(token))
-                    .body(corpo(cepDestino, volumes)).retrieve().body(JsonNode.class);
+                    .body(corpo(origem(cepOrigemAtelie), cepDestino, volumes)).retrieve().body(JsonNode.class);
         } catch (RestClientException falha) {
             throw indisponivel();
         }
@@ -103,7 +104,11 @@ public class MelhorEnvioClient implements ProvedorFrete {
         return opcoes;
     }
 
-    private Map<String, Object> corpo(String cepDestino, List<VolumeFrete> volumes) {
+    private String origem(String cepOrigemAtelie) {
+        return Cep.normalizado(cepOrigemAtelie).orElse(cepOrigemPadrao);
+    }
+
+    private Map<String, Object> corpo(String cepOrigem, String cepDestino, List<VolumeFrete> volumes) {
         var produtos = new ArrayList<Map<String, Object>>();
         for (var volume : volumes) {
             var produto = new LinkedHashMap<String, Object>();
