@@ -26,6 +26,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -69,6 +70,7 @@ import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.It
 import br.com.balaio.commerce.payment.application.CheckoutProService;
 import br.com.balaio.commerce.payment.application.port.out.PagamentoGateway;
 import br.com.balaio.commerce.shipping.application.FreteException;
+import br.com.balaio.commerce.shipping.application.port.out.OrigemFreteAtelie;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -129,6 +131,7 @@ class PosVendaHttpPostgresTest {
     @MockitoBean PagamentoGateway provedor;
     @MockitoBean JavaMailSender smtp;
     @MockitoBean ContatoConta contatos;
+    @MockitoBean OrigemFreteAtelie origensFrete;
     private final HttpClient http = HttpClient.newHttpClient();
 
     @BeforeEach
@@ -253,6 +256,7 @@ class PosVendaHttpPostgresTest {
         String slug = "jarra-frete-" + UUID.randomUUID();
         when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug, new BigDecimal("80.00"),
                 "disponivel", "atelie", artesao));
+        when(origensFrete.cepOrigem(artesao)).thenReturn(Optional.of("56800000"));
         var resposta = chamar("GET", "/api/v1/fretes?cep=01310-100&itens=" + slug + ":2", null, null);
         assertThat(resposta.statusCode()).isEqualTo(200);
         JsonNode opcoes = json.readTree(resposta.body()).path("dados");
@@ -262,11 +266,17 @@ class PosVendaHttpPostgresTest {
         assertThat(opcoes.get(0).path("prazo").asString()).isEqualTo("5 a 7 dias úteis");
         assertThat(AUTORIZACAO_MELHOR_ENVIO.get()).isEqualTo("Bearer token-sandbox-de-teste");
         JsonNode corpo = json.readTree(CORPOS_MELHOR_ENVIO.getLast());
-        assertThat(corpo.path("from").path("postal_code").asString()).isEqualTo("50030230");
+        assertThat(corpo.path("from").path("postal_code").asString()).isEqualTo("56800000");
         assertThat(corpo.path("to").path("postal_code").asString()).isEqualTo("01310100");
         assertThat(corpo.path("products").get(0).path("quantity").asInt()).isEqualTo(2);
         assertThat(corpo.path("products").get(0).path("insurance_value").decimalValue()).isEqualByComparingTo("80.00");
         assertThat(chamar("GET", "/api/v1/fretes?cep=123", null, null).statusCode()).isEqualTo(400);
+        String deOutroAtelie = "cesto-frete-" + UUID.randomUUID();
+        when(catalogo.cotar(deOutroAtelie)).thenReturn(new CatalogoCliente.Cotacao(deOutroAtelie, new BigDecimal("40.00"),
+                "disponivel", "outro", UUID.randomUUID()));
+        var misturado = chamar("GET", "/api/v1/fretes?cep=01310-100&itens=" + slug + ":1," + deOutroAtelie + ":1", null, null);
+        assertThat(misturado.statusCode()).isEqualTo(409);
+        assertThat(misturado.body()).contains("ATELIES_DIFERENTES").doesNotContain("56800000");
         assertThat(json.readTree(chamar("GET", "/api/v1/fretes", null, null).body()).path("dados").get(0)
                 .path("provedor").asString()).isEqualTo("fixo_demonstrativo");
 
@@ -280,6 +290,9 @@ class PosVendaHttpPostgresTest {
         JsonNode snapshot = json.readTree((String) gravado.get("cotacao"));
         assertThat(snapshot.path("provedor").asString()).isEqualTo("melhor_envio_sandbox");
         assertThat(snapshot.path("cepDestino").asString()).isEqualTo("52021030");
+        assertThat(snapshot.path("origemFrete").asString()).isEqualTo("atelie");
+        assertThat(json.readTree(CORPOS_MELHOR_ENVIO.getLast()).path("from").path("postal_code").asString())
+                .isEqualTo("56800000");
         assertThat(snapshot.path("transportadora").asString()).isEqualTo("Correios");
         assertThat(org.assertj.core.api.Assertions.catchThrowableOfType(FreteException.class, () ->
                 pedidos.checkout(new Checkout(List.of(new Item(slug, 1)), "me-99",

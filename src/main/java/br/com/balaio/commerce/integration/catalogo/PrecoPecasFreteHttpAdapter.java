@@ -1,7 +1,5 @@
 package br.com.balaio.commerce.integration.catalogo;
 
-import java.math.BigDecimal;
-
 import br.com.balaio.commerce.shipping.application.FreteException;
 import br.com.balaio.commerce.shipping.application.port.out.PrecoPecasFrete;
 import org.springframework.stereotype.Component;
@@ -17,9 +15,10 @@ public class PrecoPecasFreteHttpAdapter implements PrecoPecasFrete {
     }
 
     @Override
-    public BigDecimal precoAtual(String slug) {
+    public PecaFrete consultar(String slug) {
         try {
-            return catalogo.cotar(slug).preco();
+            var cotacao = catalogo.cotar(slug);
+            return new PecaFrete(cotacao.preco(), cotacao.proprietarioId());
         } catch (HttpClientErrorException.NotFound | HttpClientErrorException.Conflict indisponivel) {
             throw new FreteException(FreteException.Tipo.PECA_INDISPONIVEL,
                     "Uma das peças não está disponível para cotação.");
