@@ -11,6 +11,7 @@ import br.com.balaio.commerce.order.application.port.out.EnderecoSalvo;
 import br.com.balaio.commerce.order.application.port.out.FretePedido;
 import br.com.balaio.commerce.order.integration.FreteDoPedidoAdapter;
 import br.com.balaio.commerce.shipping.application.FreteService;
+import br.com.balaio.commerce.shipping.application.port.out.OrigemFreteAtelie;
 import br.com.balaio.commerce.shipping.application.port.out.PrecoPecasFrete;
 import br.com.balaio.commerce.shipping.integration.FreteFixoDemonstrativo;
 
@@ -44,7 +45,7 @@ import tools.jackson.databind.json.JsonMapper;
 class PedidoServiceValidacaoCheckoutTest {
     private final CatalogoPedidos catalogo = mock(CatalogoPedidos.class);
     private final FretePedido fretes = new FreteDoPedidoAdapter(
-            new FreteService(new FreteFixoDemonstrativo(), mock(PrecoPecasFrete.class)));
+            new FreteService(new FreteFixoDemonstrativo(), mock(PrecoPecasFrete.class), mock(OrigemFreteAtelie.class)));
     private final PedidoService service = new PedidoService(mock(PedidoRepository.class), catalogo, mock(EnderecoSalvo.class),
             mock(TransactionTemplate.class), new FingerprintCheckoutSha256(JsonMapper.builder().build()), fretes);
 

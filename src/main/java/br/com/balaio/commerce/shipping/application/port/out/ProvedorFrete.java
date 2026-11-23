@@ -10,5 +10,5 @@ public interface ProvedorFrete {
 
     boolean reconheceOpcao(String freteId);
 
-    List<OpcaoFrete> cotar(String cepDestino, List<VolumeFrete> volumes);
+    List<OpcaoFrete> cotar(String cepOrigemAtelie, String cepDestino, List<VolumeFrete> volumes);
 }

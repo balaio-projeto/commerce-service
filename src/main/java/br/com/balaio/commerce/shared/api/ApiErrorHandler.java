@@ -50,7 +50,7 @@ public class ApiErrorHandler {
     public ResponseEntity<Map<String, Object>> frete(FreteException erro) {
         int status = switch (erro.tipo()) {
             case CEP_INVALIDO, ITENS_INVALIDOS -> 400;
-            case PECA_INDISPONIVEL, OPCAO_INDISPONIVEL -> 409;
+            case PECA_INDISPONIVEL, OPCAO_INDISPONIVEL, ATELIES_DIFERENTES -> 409;
             case COTACAO_INDISPONIVEL, CATALOGO_INDISPONIVEL -> 503;
         };
         return resposta(status, erro.codigo(), erro.getMessage());
