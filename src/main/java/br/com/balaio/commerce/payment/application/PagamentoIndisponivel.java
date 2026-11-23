@@ -2,6 +2,6 @@ package br.com.balaio.commerce.payment.application;
 
 public class PagamentoIndisponivel extends RuntimeException {
     public PagamentoIndisponivel() {
-        super("Pagamento sandbox não configurado.");
+        super("Pagamento não configurado.");
     }
 }

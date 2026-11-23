@@ -19,15 +19,15 @@ import br.com.balaio.commerce.shipping.application.FreteException;
 import br.com.balaio.commerce.shipping.application.FreteService;
 import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
-import br.com.balaio.commerce.shipping.integration.MelhorEnvioSandboxClient;
+import br.com.balaio.commerce.shipping.integration.MelhorEnvioClient;
 import br.com.balaio.commerce.shipping.integration.ProvedorFreteConfig;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-class MelhorEnvioSandboxClientTest {
-    private static final MelhorEnvioSandboxClient.Pacote PACOTE =
-            new MelhorEnvioSandboxClient.Pacote(15, 20, 25, new BigDecimal("1.0"));
+class MelhorEnvioClientTest {
+    private static final MelhorEnvioClient.Pacote PACOTE =
+            new MelhorEnvioClient.Pacote(15, 20, 25, new BigDecimal("1.0"));
     private final AtomicInteger status = new AtomicInteger(200);
     private final AtomicReference<String> resposta = new AtomicReference<>("[]");
     private final AtomicReference<String> corpoRecebido = new AtomicReference<>();
@@ -110,12 +110,18 @@ class MelhorEnvioSandboxClientTest {
     }
 
     @Test
-    void recusaAmbienteDeProducaoECepDeOrigemInvalido() {
-        assertThatThrownBy(() -> new MelhorEnvioSandboxClient(RestClient.builder(), "https://melhorenvio.com.br", "token", "50030230",
+    void aceitaSandboxEProducaoOficiaisERecusaOutrosEnderecosECepInvalido() {
+        assertThat(new MelhorEnvioClient(RestClient.builder(), "https://melhorenvio.com.br", "token", "50030230",
+                "Balaio", "", PACOTE).provedor()).isEqualTo("melhor_envio");
+        assertThat(new MelhorEnvioClient(RestClient.builder(), "https://sandbox.melhorenvio.com.br", "token", "50030230",
+                "Balaio", "", PACOTE).provedor()).isEqualTo("melhor_envio_sandbox");
+        assertThatThrownBy(() -> new MelhorEnvioClient(RestClient.builder(), "http://melhorenvio.com.br", "token", "50030230",
                 "Balaio", "", PACOTE)).isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(() -> new MelhorEnvioSandboxClient(RestClient.builder(), "https://sandbox.melhorenvio.com.br", "token", "123",
+        assertThatThrownBy(() -> new MelhorEnvioClient(RestClient.builder(), "https://melhorenvio.example.com", "token", "50030230",
                 "Balaio", "", PACOTE)).isInstanceOf(IllegalStateException.class);
-        assertThat(new MelhorEnvioSandboxClient(RestClient.builder(), "https://sandbox.melhorenvio.com.br", "token", "50030-230",
+        assertThatThrownBy(() -> new MelhorEnvioClient(RestClient.builder(), "https://sandbox.melhorenvio.com.br", "token", "123",
+                "Balaio", "", PACOTE)).isInstanceOf(IllegalStateException.class);
+        assertThat(new MelhorEnvioClient(RestClient.builder(), "https://sandbox.melhorenvio.com.br", "token", "50030-230",
                 "Balaio", "", PACOTE).reconheceOpcao("me-2")).isTrue();
     }
 
@@ -148,8 +154,8 @@ class MelhorEnvioSandboxClientTest {
                 });
     }
 
-    private MelhorEnvioSandboxClient cliente(String servicos) {
-        return new MelhorEnvioSandboxClient(RestClient.builder(), "http://127.0.0.1:" + servidor.getAddress().getPort(), "token-sandbox",
+    private MelhorEnvioClient cliente(String servicos) {
+        return new MelhorEnvioClient(RestClient.builder(), "http://127.0.0.1:" + servidor.getAddress().getPort(), "token-sandbox",
                 "50030-230", "Balaio teste (equipe@teste.local)", servicos, PACOTE);
     }
 }
