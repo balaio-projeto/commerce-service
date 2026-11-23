@@ -20,6 +20,7 @@ import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.It
 import br.com.balaio.commerce.order.application.port.in.ComandosPedidoUseCase;
 import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase;
 import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase.Detalhe;
+import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase.Entrega;
 import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase.Resumo;
 import br.com.balaio.commerce.order.application.port.in.ProcessarPedidosPendentesUseCase;
 import br.com.balaio.commerce.payment.application.port.in.PagamentoCheckoutUseCase;
@@ -39,7 +40,8 @@ class CheckoutEnderecoSalvoTest {
         UUID pedidoId = UUID.randomUUID();
         var comando = new Checkout(List.of(new Item("vaso", 1)), "padrao", "checkout_pro", Map.of(), enderecoId);
         var resumo = new Resumo(pedidoId, comprador, UUID.randomUUID(), "vaso", OffsetDateTime.now(),
-                "aguardando_pagamento", BigDecimal.TEN, null, false, List.of(), List.of());
+                "aguardando_pagamento", BigDecimal.TEN, null, false, List.of(), List.of(),
+                new Entrega(null, null, null, null, null, null));
         when(pedidos.checkoutSalvo(comando, comprador, "chave", "jwt-comprador")).thenReturn(pedidoId);
         when(consultas.consultar(pedidoId, comprador)).thenReturn(new Detalhe(resumo, Map.of()));
 

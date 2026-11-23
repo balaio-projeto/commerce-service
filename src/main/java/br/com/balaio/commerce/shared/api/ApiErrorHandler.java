@@ -6,10 +6,12 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 
 import br.com.balaio.commerce.cart.application.SacolaException;
+import br.com.balaio.commerce.dashboard.domain.PeriodoInvalido;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.ErroCatalogo;
 import br.com.balaio.commerce.payment.api.WebhookInvalido;
 import br.com.balaio.commerce.payment.application.PagamentoIndisponivel;
 import br.com.balaio.commerce.shared.security.AcessoNegado;
+import br.com.balaio.commerce.shipping.application.FreteException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -33,7 +35,7 @@ public class ApiErrorHandler {
     @ExceptionHandler(PedidoException.class)
     public ResponseEntity<Map<String, Object>> regra(PedidoException erro) {
         int status = switch (erro.tipo()) {
-            case REQUISICAO_INVALIDA -> 400;
+            case REQUISICAO_INVALIDA, RASTREIO_INVALIDO -> 400;
             case SEM_PERMISSAO -> 403;
             case PEDIDO_NAO_ENCONTRADO, ENDERECO_NAO_ENCONTRADO -> 404;
             case PEDIDO_CONFLITANTE, CHECKOUT_CONFLITANTE, MEDIACAO_NECESSARIA,
@@ -42,6 +44,21 @@ public class ApiErrorHandler {
             case PERFIL_INDISPONIVEL -> 503;
         };
         return resposta(status, erro.codigo(), erro.getMessage());
+    }
+
+    @ExceptionHandler(FreteException.class)
+    public ResponseEntity<Map<String, Object>> frete(FreteException erro) {
+        int status = switch (erro.tipo()) {
+            case CEP_INVALIDO, ITENS_INVALIDOS -> 400;
+            case PECA_INDISPONIVEL, OPCAO_INDISPONIVEL -> 409;
+            case COTACAO_INDISPONIVEL, CATALOGO_INDISPONIVEL -> 503;
+        };
+        return resposta(status, erro.codigo(), erro.getMessage());
+    }
+
+    @ExceptionHandler(PeriodoInvalido.class)
+    public ResponseEntity<Map<String, Object>> periodo(PeriodoInvalido erro) {
+        return resposta(400, erro.codigo(), erro.getMessage());
     }
 
     @ExceptionHandler(AcessoNegado.class)

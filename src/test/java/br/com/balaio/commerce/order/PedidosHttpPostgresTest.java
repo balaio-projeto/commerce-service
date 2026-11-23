@@ -177,6 +177,9 @@ class PedidosHttpPostgresTest {
         assertThat(chamar("PATCH", caminho, tokenOutro, "{\"estado\":\"producao\",\"artesaoId\":\""
                 + outro + "\"}").statusCode()).isEqualTo(403);
         assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"enviado\"}").statusCode()).isEqualTo(400);
+        assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"enviado\",\"rastreio\":\"BR123456789\"}")
+                .statusCode()).isEqualTo(409);
+        assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"arquivado\"}").statusCode()).isEqualTo(400);
         assertThat(pedidos.consultar(id, comprador).pedido().estado()).isEqualTo("confirmado");
         var alterado = chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"producao\"}");
         assertThat(alterado.statusCode()).isEqualTo(200);

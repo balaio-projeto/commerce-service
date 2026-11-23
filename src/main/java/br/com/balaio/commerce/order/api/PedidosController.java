@@ -1,6 +1,5 @@
 package br.com.balaio.commerce.order.api;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -11,7 +10,6 @@ import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase;
 import br.com.balaio.commerce.order.application.port.in.ComandosPedidoUseCase;
 import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase;
 import br.com.balaio.commerce.order.domain.EstadoPedido;
-import br.com.balaio.commerce.order.domain.RegrasCheckout;
 import br.com.balaio.commerce.shared.api.Envelope;
 import br.com.balaio.commerce.shared.security.PapelJwt;
 import org.springframework.http.ResponseEntity;
@@ -38,8 +36,11 @@ public class PedidosController {
     }
 
     public record Motivo(String motivo) { }
-    public record Estado(String estado) { }
-    public record Frete(String id, String nome, String prazo, BigDecimal valor) { }
+    public record Estado(String estado, String rastreio, String transportadora) {
+        public Estado(String estado) {
+            this(estado, null, null);
+        }
+    }
     public record Item(String slug, Integer quantidade) { }
     public record Checkout(List<Item> itens, String freteId, String meio, Map<String, String> endereco, UUID enderecoId) {
         CheckoutPedidoUseCase.Checkout comando() {
@@ -47,12 +48,6 @@ public class PedidosController {
                     .map(item -> item == null ? null : new CheckoutPedidoUseCase.Item(item.slug(), item.quantidade())).toList();
             return new CheckoutPedidoUseCase.Checkout(itensCheckout, freteId, meio, endereco, enderecoId);
         }
-    }
-
-    @GetMapping("/api/v1/fretes")
-    public Envelope fretes() {
-        return new Envelope(List.of(new Frete(RegrasCheckout.FRETE_ID, "Entrega regional demonstrativa",
-                "10 a 14 dias úteis", RegrasCheckout.FRETE_PADRAO)), null);
     }
 
     @PostMapping("/api/v1/checkout")
@@ -103,9 +98,10 @@ public class PedidosController {
     @PatchMapping("/api/v1/pedidos/{id}/estado")
     public Envelope estado(@PathVariable UUID id, @RequestBody Estado comando, @AuthenticationPrincipal Jwt jwt) {
         UUID artesao = PapelJwt.exigir(jwt, "artesao");
-        if (comando == null || !"producao".equals(comando.estado()))
+        if (comando == null)
             throw new PedidoException(PedidoException.Tipo.REQUISICAO_INVALIDA, "Estado inválido.");
-        return new Envelope(PedidoResponse.de(comandos.producao(id, artesao)), null);
+        return new Envelope(PedidoResponse.de(comandos.avancar(id, artesao, comando.estado(), comando.rastreio(),
+                comando.transportadora())), null);
     }
 
     private ResponseEntity<Envelope> resposta(String estado, Object dados) {

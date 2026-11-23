@@ -23,10 +23,12 @@ public interface PedidoRepository {
 
     Optional<CheckoutExistente> buscarCheckoutSobLock(UUID comprador, String chave);
     void criarCheckout(UUID id, UUID comprador, UUID artesao, String chave, String fingerprint,
-            Map<String, String> endereco, BigDecimal frete, BigDecimal total, String meio, List<ItemPedido> itens);
+            Map<String, String> endereco, FreteDoCheckout frete, BigDecimal total, String meio, List<ItemPedido> itens);
 
     void iniciarEncerramento(UUID id, String destino, String tipo, String motivo);
     void iniciarProducao(UUID id);
+    void avancarEstado(UUID id, String destino);
+    void registrarEnvio(UUID id, String rastreio, String transportadora);
     void travarDecisao(UUID decisaoId);
     Optional<DecisaoRegistrada> buscarDecisao(UUID decisaoId);
     boolean recebeuDecisao(UUID id);
@@ -49,5 +51,6 @@ public interface PedidoRepository {
     record EtapaRegistrada(String estado, String titulo, String detalhe, String nota, OffsetDateTime criadaEm) { }
     record PendenteArtesao(UUID id, String pecaSlug, OffsetDateTime quando, BigDecimal valor) { }
     record CheckoutExistente(UUID id, String fingerprint) { }
+    record FreteDoCheckout(String id, BigDecimal valor, Map<String, Object> cotacao) { }
     record DecisaoRegistrada(UUID pedidoId, String decisao) { }
 }

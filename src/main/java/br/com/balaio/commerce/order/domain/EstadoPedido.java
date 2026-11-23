@@ -13,6 +13,15 @@ public final class EstadoPedido {
         return "confirmado".equals(estado);
     }
 
+    public static String anteriorExigidoPara(String destino) {
+        return switch (destino == null ? "" : destino) {
+            case "producao" -> "confirmado";
+            case "enviado" -> "producao";
+            case "entregue" -> "enviado";
+            default -> null;
+        };
+    }
+
     public static boolean permiteMediacao(String estado) {
         return permiteProducao(estado) || producaoIniciada(estado);
     }

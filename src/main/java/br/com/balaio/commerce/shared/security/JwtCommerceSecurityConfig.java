@@ -80,7 +80,8 @@ public class JwtCommerceSecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/pagamentos/mercado-pago/notificacoes").permitAll()
                         .requestMatchers("/api/v1/checkout", "/api/v1/pedidos/**", "/api/v1/estado/sacola", "/api/v1/sacola/revalidar",
-                                "/api/v1/artesao/pedidos-pendentes", "/api/v1/artesao/vendas").authenticated()
+                                "/api/v1/artesao/pedidos-pendentes", "/api/v1/artesao/vendas",
+                                "/api/v1/artesao/vendas/relatorio", "/api/v1/artesao/painel/resumo").authenticated()
                         .anyRequest().permitAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> {})
                         .authenticationEntryPoint((request, response, error) -> erro(response, HttpStatus.UNAUTHORIZED,

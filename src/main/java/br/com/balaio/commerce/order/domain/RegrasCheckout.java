@@ -1,6 +1,5 @@
 package br.com.balaio.commerce.order.domain;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -8,8 +7,6 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 public final class RegrasCheckout {
-    public static final BigDecimal FRETE_PADRAO = new BigDecimal("38.90");
-    public static final String FRETE_ID = "padrao";
     private static final Set<String> UFS = Set.of("AC", "AL", "AP", "AM", "BA", "CE",
             "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
             "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO");
@@ -22,8 +19,8 @@ public final class RegrasCheckout {
         return comprador != null && !vazio(chave) && chave.length() <= 160;
     }
 
-    public static boolean comandoValido(List<?> itens, String frete, String meio, Map<String, String> endereco) {
-        return itens != null && !itens.isEmpty() && itens.size() <= 20 && FRETE_ID.equals(frete)
+    public static boolean comandoValido(List<?> itens, boolean freteReconhecido, String meio, Map<String, String> endereco) {
+        return itens != null && !itens.isEmpty() && itens.size() <= 20 && freteReconhecido
                 && "checkout_pro".equals(meio) && enderecoValido(endereco);
     }
 

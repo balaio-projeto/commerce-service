@@ -17,7 +17,9 @@ public interface ConsultarPedidosUseCase {
     record Detalhe(Resumo pedido, Object endereco) { }
     record Resumo(UUID id, UUID compradorId, UUID artesaoId, String pecaSlug, OffsetDateTime criadoEm,
             String estado, BigDecimal total, String motivoEncerramento, boolean historicoInferido,
-            List<Etapa> etapas, List<ItemResumo> itens) { }
+            List<Etapa> etapas, List<ItemResumo> itens, Entrega entrega) { }
+    record Entrega(BigDecimal frete, String rastreio, String transportadora, String freteOpcao,
+            String freteProvedor, String previsaoEntrega) { }
     record Etapa(String estado, String titulo, String detalhe, String nota, OffsetDateTime criadaEm,
             boolean concluida, boolean atual, boolean inferida) { }
     record ItemResumo(String slug, int quantidade, BigDecimal preco) { }

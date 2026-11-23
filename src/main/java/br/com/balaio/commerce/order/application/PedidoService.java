@@ -1,7 +1,5 @@
 package br.com.balaio.commerce.order.application;
 
-import static br.com.balaio.commerce.order.domain.RegrasCheckout.FRETE_PADRAO;
-
 import br.com.balaio.commerce.order.application.PedidoException.Tipo;
 import br.com.balaio.commerce.order.application.port.in.ConsultarPedidosUseCase;
 import br.com.balaio.commerce.order.application.port.in.ComandosPedidoUseCase;
@@ -13,6 +11,7 @@ import br.com.balaio.commerce.order.domain.EstadoPedido;
 import br.com.balaio.commerce.order.domain.ItemPedido;
 import br.com.balaio.commerce.order.domain.Pedido;
 import br.com.balaio.commerce.order.domain.RegrasCheckout;
+import br.com.balaio.commerce.order.domain.RegrasEnvio;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -29,6 +28,8 @@ import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.ErroCatalogo;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.Falha;
 import br.com.balaio.commerce.order.application.port.out.EnderecoSalvo;
+import br.com.balaio.commerce.order.application.port.out.FretePedido;
+import br.com.balaio.commerce.order.application.port.out.PedidoRepository.FreteDoCheckout;
 
 @Service
 public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUseCase,
@@ -38,14 +39,16 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
     private final EnderecoSalvo enderecos;
     private final TransactionTemplate transacoes;
     private final FingerprintCheckout fingerprints;
+    private final FretePedido fretes;
 
     public PedidoService(PedidoRepository repositorio, CatalogoPedidos catalogo, EnderecoSalvo enderecos,
-            TransactionTemplate transacoes, FingerprintCheckout fingerprints) {
+            TransactionTemplate transacoes, FingerprintCheckout fingerprints, FretePedido fretes) {
         this.repositorio = repositorio;
         this.catalogo = catalogo;
         this.enderecos = enderecos;
         this.transacoes = transacoes;
         this.fingerprints = fingerprints;
+        this.fretes = fretes;
     }
 
     @Override
@@ -57,7 +60,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         if (existente != null) return existente;
         validarComando(comando);
         ItensCotados cotacao = cotarItens(comando.itens());
-        return persistir(comando, comprador, chave, fingerprint, cotacao);
+        return persistir(comando, comprador, chave, fingerprint, cotacao, escolherFrete(comando, cotacao));
     }
 
     @Override
@@ -72,7 +75,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
                 enderecos.consultar(comando.enderecoId(), tokenComprador), comando.enderecoId());
         validarComando(resolvido);
         ItensCotados cotacao = cotarItens(resolvido.itens());
-        return persistir(resolvido, comprador, chave, fingerprint, cotacao);
+        return persistir(resolvido, comprador, chave, fingerprint, cotacao, escolherFrete(resolvido, cotacao));
     }
 
     private void validarChave(UUID comprador, String chave) {
@@ -81,7 +84,8 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
     }
 
     private void validarComando(Checkout comando) {
-        if (!RegrasCheckout.comandoValido(comando.itens(), comando.freteId(), comando.meio(), comando.endereco()))
+        if (!RegrasCheckout.comandoValido(comando.itens(), fretes.reconhece(comando.freteId()), comando.meio(),
+                comando.endereco()))
             throw comandoInvalido();
     }
 
@@ -93,7 +97,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         var slugs = new HashSet<String>();
         var cotados = new ArrayList<ItemPedido>();
         UUID artesao = null;
-        BigDecimal total = FRETE_PADRAO;
+        BigDecimal total = BigDecimal.ZERO;
         for (var item : itens) {
             validarItem(item, slugs);
             var cotacao = catalogo.cotar(item.slug());
@@ -115,13 +119,21 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
             throw new PedidoException(Tipo.PEDIDO_CONFLITANTE, "Finalize separadamente as peças de cada ateliê.");
     }
 
-    private UUID persistir(Checkout comando, UUID comprador, String chave, String fingerprint, ItensCotados cotacao) {
+    private FreteDoCheckout escolherFrete(Checkout comando, ItensCotados cotacao) {
+        var itens = cotacao.itens().stream()
+                .map(item -> new FretePedido.ItemFrete(item.slug(), item.quantidade(), item.preco())).toList();
+        var escolhido = fretes.escolher(comando.freteId(), comando.endereco().get("cep"), itens);
+        return new FreteDoCheckout(escolhido.id(), escolhido.valor(), escolhido.snapshot());
+    }
+
+    private UUID persistir(Checkout comando, UUID comprador, String chave, String fingerprint, ItensCotados cotacao,
+            FreteDoCheckout frete) {
         return transacoes.execute(status -> {
             UUID jaCriado = buscarCheckoutExistente(comprador, chave, fingerprint);
             if (jaCriado != null) return jaCriado;
             UUID id = UUID.randomUUID();
             repositorio.criarCheckout(id, comprador, cotacao.artesao(), chave, fingerprint, comando.endereco(),
-                    FRETE_PADRAO, cotacao.total(), comando.meio(), cotacao.itens());
+                    frete, cotacao.total().add(frete.valor()), comando.meio(), cotacao.itens());
             return id;
         });
     }
@@ -219,6 +231,35 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
             throw new PedidoException(Tipo.PEDIDO_CONFLITANTE, "Transição de pedido inválida.");
         repositorio.iniciarProducao(id);
         return resumo(obter(id, false));
+    }
+
+    @Override
+    @Transactional
+    public Resumo avancar(UUID id, UUID artesao, String destino, String rastreio, String transportadora) {
+        String anteriorExigido = EstadoPedido.anteriorExigidoPara(destino);
+        if (anteriorExigido == null) throw new PedidoException(Tipo.REQUISICAO_INVALIDA, "Estado inválido.");
+        boolean envio = "enviado".equals(destino);
+        String codigo = envio ? rastreioValido(rastreio) : null;
+        String empresa = envio ? transportadoraValida(transportadora) : null;
+        var pedido = obter(id, true);
+        if (!pedido.artesao().equals(artesao)) throw new PedidoException(Tipo.SEM_PERMISSAO, "Este pedido pertence a outro ateliê.");
+        if (pedido.encerramento() != null || !anteriorExigido.equals(pedido.estado()))
+            throw new PedidoException(Tipo.PEDIDO_CONFLITANTE, "Transição de pedido inválida.");
+        if (envio) repositorio.registrarEnvio(id, codigo, empresa);
+        else repositorio.avancarEstado(id, destino);
+        return resumo(obter(id, false));
+    }
+
+    private String rastreioValido(String rastreio) {
+        return RegrasEnvio.rastreioNormalizado(rastreio).orElseThrow(() -> new PedidoException(Tipo.RASTREIO_INVALIDO,
+                "Informe o código de rastreio com 5 a 40 letras, números ou hífens."));
+    }
+
+    private String transportadoraValida(String transportadora) {
+        String nome = RegrasEnvio.transportadoraNormalizada(transportadora);
+        if (!RegrasEnvio.transportadoraValida(nome))
+            throw new PedidoException(Tipo.REQUISICAO_INVALIDA, "Nome da transportadora muito longo.");
+        return nome;
     }
 
     @Override
@@ -353,7 +394,17 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         }
         return new Resumo(pedido.id(), pedido.comprador(), pedido.artesao(), itens.getFirst().slug(),
                 pedido.criadoEm(), pedido.estado(), pedido.total(), pedido.motivo(), historicoInferido, List.copyOf(etapas),
-                itens.stream().map(item -> new ItemResumo(item.slug(), item.quantidade(), item.preco())).toList());
+                itens.stream().map(item -> new ItemResumo(item.slug(), item.quantidade(), item.preco())).toList(),
+                entrega(pedido));
+    }
+
+    private Entrega entrega(Pedido pedido) {
+        var frete = pedido.freteContratado();
+        String transportadora = pedido.transportadora() != null || frete == null
+                ? pedido.transportadora() : frete.transportadora();
+        return new Entrega(pedido.frete(), pedido.rastreio(), transportadora,
+                frete == null ? null : frete.nome(), frete == null ? null : frete.provedor(),
+                frete == null ? null : frete.previsaoEntrega());
     }
 
     private boolean vazio(String texto) { return texto == null || texto.isBlank(); }

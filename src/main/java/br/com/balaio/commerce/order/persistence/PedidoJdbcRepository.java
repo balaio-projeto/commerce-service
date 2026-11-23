@@ -11,12 +11,14 @@ import br.com.balaio.commerce.order.application.PedidoException;
 import br.com.balaio.commerce.order.application.port.in.PedidoParaPagamento.ItemCobranca;
 import br.com.balaio.commerce.order.application.port.out.PedidoFinanceiroRepository;
 import br.com.balaio.commerce.order.application.port.out.PedidoRepository;
+import br.com.balaio.commerce.order.domain.FreteContratado;
 import br.com.balaio.commerce.order.domain.ItemPedido;
 import br.com.balaio.commerce.order.domain.Pedido;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @Repository
@@ -41,13 +43,30 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
     }
 
     private Optional<Pedido> buscar(UUID id, boolean bloquear) {
-        String sql = "SELECT id, comprador_id, artesao_id, estado, encerramento, motivo, frete, total, criado_em FROM pedidos WHERE id = ?"
+        String sql = "SELECT id, comprador_id, artesao_id, estado, encerramento, motivo, frete, total, criado_em, "
+                + "rastreio, transportadora, frete_cotacao::text AS frete_cotacao FROM pedidos WHERE id = ?"
                 + (bloquear ? " FOR UPDATE" : "");
         return jdbc.query(sql, (rs, row) -> new Pedido((UUID) rs.getObject("id"),
                 (UUID) rs.getObject("comprador_id"), (UUID) rs.getObject("artesao_id"),
                 rs.getString("estado"), rs.getString("encerramento"), rs.getString("motivo"),
                 rs.getBigDecimal("frete"), rs.getBigDecimal("total"),
-                rs.getObject("criado_em", OffsetDateTime.class)), id).stream().findFirst();
+                rs.getObject("criado_em", OffsetDateTime.class), rs.getString("rastreio"),
+                rs.getString("transportadora"), freteContratado(rs.getString("frete_cotacao"))), id).stream().findFirst();
+    }
+
+    private FreteContratado freteContratado(String cotacao) {
+        if (cotacao == null) return null;
+        try {
+            JsonNode frete = json.readTree(cotacao);
+            return new FreteContratado(texto(frete, "nome"), texto(frete, "provedor"),
+                    texto(frete, "transportadora"), texto(frete, "prazo"));
+        } catch (JacksonException invalida) {
+            return null;
+        }
+    }
+
+    private String texto(JsonNode no, String campo) {
+        return no.hasNonNull(campo) ? no.path(campo).asString() : null;
     }
 
     @Override
@@ -113,10 +132,11 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
 
     @Override
     public void criarCheckout(UUID id, UUID comprador, UUID artesao, String chave, String fingerprint,
-            Map<String, String> endereco, BigDecimal frete, BigDecimal total, String meio, List<ItemPedido> itens) {
+            Map<String, String> endereco, FreteDoCheckout frete, BigDecimal total, String meio, List<ItemPedido> itens) {
         try {
-            jdbc.update("INSERT INTO pedidos(id, comprador_id, artesao_id, estado, chave_checkout, fingerprint_checkout, endereco, frete_id, frete, total, meio) VALUES (?, ?, ?, 'aguardando_reserva', ?, ?, CAST(? AS jsonb), 'padrao', ?, ?, ?)",
-                    id, comprador, artesao, chave, fingerprint, json.writeValueAsString(endereco), frete, total, meio);
+            jdbc.update("INSERT INTO pedidos(id, comprador_id, artesao_id, estado, chave_checkout, fingerprint_checkout, endereco, frete_id, frete, total, meio, frete_cotacao) VALUES (?, ?, ?, 'aguardando_reserva', ?, ?, CAST(? AS jsonb), ?, ?, ?, ?, CAST(? AS jsonb))",
+                    id, comprador, artesao, chave, fingerprint, json.writeValueAsString(endereco), frete.id(), frete.valor(),
+                    total, meio, json.writeValueAsString(frete.cotacao()));
         } catch (JacksonException exception) {
             throw new PedidoException(PedidoException.Tipo.REQUISICAO_INVALIDA, "Endereço inválido.");
         }
@@ -134,6 +154,17 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
     @Override
     public void iniciarProducao(UUID id) {
         jdbc.update("UPDATE pedidos SET estado = 'producao', atualizado_em = now() WHERE id = ?", id);
+    }
+
+    @Override
+    public void avancarEstado(UUID id, String destino) {
+        jdbc.update("UPDATE pedidos SET estado = ?, atualizado_em = now() WHERE id = ?", destino, id);
+    }
+
+    @Override
+    public void registrarEnvio(UUID id, String rastreio, String transportadora) {
+        jdbc.update("UPDATE pedidos SET estado = 'enviado', rastreio = ?, transportadora = ?, atualizado_em = now() WHERE id = ?",
+                rastreio, transportadora, id);
     }
 
     @Override

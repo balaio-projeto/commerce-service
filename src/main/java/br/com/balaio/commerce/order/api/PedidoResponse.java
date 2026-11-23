@@ -1,6 +1,8 @@
 package br.com.balaio.commerce.order.api;
 
 import java.math.BigDecimal;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -19,15 +21,24 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 public record PedidoResponse(UUID id, UUID compradorId, UUID artesaoId, String pecaSlug, String compradorNome,
         String data, String estado, BigDecimal total, boolean avaliado, boolean simulado, String motivoEncerramento,
         @JsonInclude(JsonInclude.Include.NON_NULL) Boolean historicoInferido,
-        List<EtapaResponse> etapas, List<ItemResponse> itens) {
+        List<EtapaResponse> etapas, List<ItemResponse> itens, BigDecimal frete, String rastreio,
+        String transportadora, String linkRastreio, String freteOpcao, String freteProvedor, String previsaoEntrega) {
     private static final DateTimeFormatter DATA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final String LINK_RASTREIO = "https://www.melhorrastreio.com.br/rastreio/";
 
     public static PedidoResponse de(Resumo resumo) {
+        var entrega = resumo.entrega();
         return new PedidoResponse(resumo.id(), resumo.compradorId(), resumo.artesaoId(), resumo.pecaSlug(), "Comprador",
                 resumo.criadoEm().format(DATA), resumo.estado(), resumo.total(), false, false, resumo.motivoEncerramento(),
                 resumo.historicoInferido() ? Boolean.TRUE : null,
                 resumo.etapas().stream().map(PedidoResponse::etapa).toList(),
-                resumo.itens().stream().map(ItemResponse::de).toList());
+                resumo.itens().stream().map(ItemResponse::de).toList(),
+                entrega.frete(), entrega.rastreio(), entrega.transportadora(), linkRastreio(entrega.rastreio()),
+                entrega.freteOpcao(), entrega.freteProvedor(), entrega.previsaoEntrega());
+    }
+
+    private static String linkRastreio(String rastreio) {
+        return rastreio == null ? null : LINK_RASTREIO + URLEncoder.encode(rastreio, StandardCharsets.UTF_8);
     }
 
     public static ComPagamento comPagamento(ResumoComPagamento resumo) {
