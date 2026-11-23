@@ -12,8 +12,9 @@ import org.springframework.stereotype.Component;
 public class MercadoPagoConfig implements AmbientePagamento {
     public static final String AMBIENTE_SANDBOX = "sandbox";
     public static final String AMBIENTE_PRODUCAO = "production";
-    private static final Set<String> HOSTS_CHECKOUT_SANDBOX = Set.of("sandbox.mercadopago.com", "sandbox.mercadopago.com.br");
     private static final Set<String> HOSTS_CHECKOUT_PRODUCAO = Set.of("www.mercadopago.com", "www.mercadopago.com.br");
+    private static final Set<String> HOSTS_CHECKOUT_SANDBOX = Set.of("www.mercadopago.com", "www.mercadopago.com.br",
+            "sandbox.mercadopago.com", "sandbox.mercadopago.com.br");
 
     private final String accessToken;
     private final String webhookSecret;
@@ -61,7 +62,7 @@ public class MercadoPagoConfig implements AmbientePagamento {
     }
 
     public String campoUrlCheckout() {
-        return producao ? "init_point" : "sandbox_init_point";
+        return "init_point";
     }
 
     public boolean hostCheckoutPermitido(String host) {
