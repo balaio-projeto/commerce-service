@@ -30,13 +30,14 @@ class MercadoPagoConfigTest {
     }
 
     @Test
-    void sandboxUsaLinkDeTesteDoCheckout() {
+    void sandboxUsaOCheckoutAtualComCredenciaisDeTeste() {
         var config = new MercadoPagoConfig("sandbox", API, "APP_USR-token", "segredo", WEBHOOK, RETORNO);
         assertThat(config.enabled()).isTrue();
         assertThat(config.producao()).isFalse();
-        assertThat(config.campoUrlCheckout()).isEqualTo("sandbox_init_point");
+        assertThat(config.campoUrlCheckout()).isEqualTo("init_point");
+        assertThat(config.hostCheckoutPermitido("www.mercadopago.com.br")).isTrue();
         assertThat(config.hostCheckoutPermitido("sandbox.mercadopago.com.br")).isTrue();
-        assertThat(config.hostCheckoutPermitido("www.mercadopago.com.br")).isFalse();
+        assertThat(config.hostCheckoutPermitido("mercadopago.com.br.example.com")).isFalse();
     }
 
     @Test
