@@ -6,6 +6,8 @@ import java.util.UUID;
 
 public interface EmailsPedidoUseCase {
     int processarPendentes();
+    /** Processa lotes até a fila esvaziar ou até {@code maximoLotes}; devolve o total enviado. */
+    int drenarPendentes(int maximoLotes);
     List<SituacaoEmail> situacao(UUID pedido);
     int reenviarFalhas(UUID pedido);
 
