@@ -9,6 +9,7 @@ import java.util.concurrent.CompletionException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import br.com.balaio.commerce.dashboard.application.port.in.ResumoPainelUseCase;
@@ -24,18 +25,23 @@ public class ResumoPainelService implements ResumoPainelUseCase {
     private final VendasArtesaoRepository vendas;
     private final RelatorioVendasService relatorio;
     private final PecasDoPainel catalogo;
+    private final boolean paralelo;
 
-    public ResumoPainelService(VendasArtesaoRepository vendas, RelatorioVendasService relatorio, PecasDoPainel catalogo) {
+    public ResumoPainelService(VendasArtesaoRepository vendas, RelatorioVendasService relatorio, PecasDoPainel catalogo,
+            @Value("${balaio.painel.paralelo:true}") boolean paralelo) {
         this.vendas = vendas;
         this.relatorio = relatorio;
         this.catalogo = catalogo;
+        this.paralelo = paralelo;
     }
 
     @Override
     public Resumo resumo(UUID artesao, String tokenArtesao) {
         long inicio = System.nanoTime();
-        var pecas = CompletableFuture.supplyAsync(() -> catalogo.listar(artesao, tokenArtesao),
-                runnable -> Thread.ofVirtual().start(runnable));
+        // Modo paralelo (padrão): a chamada ao catálogo roda em thread virtual enquanto as consultas locais executam.
+        // Modo sequencial (balaio.painel.paralelo=false): a chamada ao catálogo termina antes das consultas locais.
+        // A falha do catálogo é capturada nos dois modos, e as consultas locais sempre rodam.
+        var pecas = paralelo ? catalogoParalelo(artesao, tokenArtesao) : catalogoSequencial(artesao, tokenArtesao);
         var faturamento = relatorio.receitaDoMes(artesao);
         Map<String, Integer> contagem = vendas.pedidosAtivosPorEstado(artesao);
         var indisponiveis = new ArrayList<String>();
@@ -52,6 +58,19 @@ public class ResumoPainelService implements ResumoPainelUseCase {
         return new Resumo(VERSAO_CONTRATO, faturamento, contagem.getOrDefault("confirmado", 0),
                 contagem.getOrDefault("producao", 0), contagem.getOrDefault("enviado", 0), ativas, avisos,
                 !indisponiveis.isEmpty(), List.copyOf(indisponiveis), (System.nanoTime() - inicio) / 1_000_000);
+    }
+
+    private CompletableFuture<List<PecaPainel>> catalogoParalelo(UUID artesao, String tokenArtesao) {
+        return CompletableFuture.supplyAsync(() -> catalogo.listar(artesao, tokenArtesao),
+                runnable -> Thread.ofVirtual().start(runnable));
+    }
+
+    private CompletableFuture<List<PecaPainel>> catalogoSequencial(UUID artesao, String tokenArtesao) {
+        try {
+            return CompletableFuture.completedFuture(catalogo.listar(artesao, tokenArtesao));
+        } catch (RuntimeException falha) {
+            return CompletableFuture.failedFuture(falha);
+        }
     }
 
     private List<Aviso> aviso(PecaPainel peca) {
