@@ -10,15 +10,18 @@ import br.com.balaio.commerce.notification.application.port.in.EmailsPedidoUseCa
 public class EmailsPedidoAgendados {
     private final EmailsPedidoUseCase emails;
     private final boolean ativo;
+    private final int maximoLotesPorCiclo;
 
     public EmailsPedidoAgendados(EmailsPedidoUseCase emails,
-            @Value("${balaio.mail.worker-enabled:${balaio.worker.enabled:true}}") boolean ativo) {
+            @Value("${balaio.mail.worker-enabled:${balaio.worker.enabled:true}}") boolean ativo,
+            @Value("${balaio.mail.max-lotes-por-ciclo:20}") int maximoLotesPorCiclo) {
         this.emails = emails;
         this.ativo = ativo;
+        this.maximoLotesPorCiclo = Math.max(1, maximoLotesPorCiclo);
     }
 
     @Scheduled(fixedDelayString = "${balaio.mail.intervalo-ms:15000}", initialDelayString = "${balaio.mail.intervalo-ms:15000}")
     public void processar() {
-        if (ativo) emails.processarPendentes();
+        if (ativo) emails.drenarPendentes(maximoLotesPorCiclo);
     }
 }

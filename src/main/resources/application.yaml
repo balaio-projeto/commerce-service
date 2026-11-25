@@ -31,8 +31,16 @@ balaio:
   mail:
     from: ${COMMERCE_MAIL_FROM:nao-responda@localhost}
     frontend-url: ${COMMERCE_FRONTEND_BASE_URL:http://localhost:4321}
+    paralelo: ${BALAIO_MAIL_PARALELO:false}
+    concorrencia: ${BALAIO_MAIL_CONCORRENCIA:8}
+    max-lotes-por-ciclo: ${BALAIO_MAIL_MAX_LOTES_POR_CICLO:20}
   painel:
     catalogo-timeout-ms: ${COMMERCE_PAINEL_CATALOGO_TIMEOUT_MS:800}
+    paralelo: ${BALAIO_PAINEL_PARALELO:true}
+  pagamento:
+    simulador:
+      # Só para desenvolvimento: provedor de pagamento simulado. Não pode coexistir com Mercado Pago.
+      ativo: ${BALAIO_PAGAMENTO_SIMULADOR_ATIVO:false}
 payment:
   mercadopago:
     environment: ${MERCADOPAGO_ENVIRONMENT:}

@@ -236,6 +236,38 @@ class PedidosHttpPostgresTest {
         assertThat(etapa.path("atual").asBoolean()).isTrue();
     }
 
+    /** TC19 (TS08): o total é calculado pelo servidor; valores enviados pelo cliente não o alteram. */
+    @Test
+    void totalEhCalculadoNoServidorEIgnoraValoresDoCliente() throws Exception {
+        UUID comprador = UUID.randomUUID();
+        UUID enderecoId = UUID.randomUUID();
+        String slug = "total-http-" + UUID.randomUUID();
+        String jwt = token(comprador, "comprador");
+        when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug,
+                new BigDecimal("40.00"), "encomenda", "atelie", UUID.randomUUID()));
+        when(enderecos.consultar(enderecoId, jwt)).thenReturn(Map.of("cep", "52021030", "endereco", "Rua do perfil",
+                "cidade", "Recife", "estado", "PE"));
+        when(provedor.buscar(any())).thenReturn(List.of());
+        when(provedor.criar(any(), any(), any())).thenAnswer(chamada -> {
+            UUID id = chamada.getArgument(0);
+            return new PagamentoGateway.Preferencia("pref-" + id,
+                    "https://sandbox.mercadopago.com/checkout/pay?pref_id=pref-" + id);
+        });
+        String corpo = """
+                {"itens":[{"slug":"%s","quantidade":1,"preco":1.00}],"freteId":"padrao","meio":"checkout_pro",
+                 "enderecoId":"%s","total":1.00,"valorTotal":0}
+                """.formatted(slug, enderecoId);
+        var checkout = requisicao("/api/v1/checkout").header("Authorization", "Bearer " + jwt)
+                .header("Idempotency-Key", slug).POST(HttpRequest.BodyPublishers.ofString(corpo)).build();
+
+        var resposta = http.send(checkout, HttpResponse.BodyHandlers.ofString());
+
+        assertThat(resposta.statusCode()).isEqualTo(202);
+        var total = json.readTree(resposta.body()).path("dados").path("total").decimalValue();
+        assertThat(total).isGreaterThanOrEqualTo(new BigDecimal("40.00"));
+        assertThat(total).isNotEqualByComparingTo(new BigDecimal("1.00"));
+    }
+
     @Test
     void checkoutSalvoViaHttpMantemReplayEWebhookRetorna200SemCorpo() throws Exception {
         UUID comprador = UUID.randomUUID();

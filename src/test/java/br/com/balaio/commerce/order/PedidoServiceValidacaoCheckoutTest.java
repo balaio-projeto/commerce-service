@@ -138,6 +138,17 @@ class PedidoServiceValidacaoCheckoutTest {
         assertRequisicaoInvalida(new Checkout(itens, "padrao", "checkout_pro", enderecoValido()));
     }
 
+    /** TC18 (TS08): quantidade acima do limite por item é recusada antes de cotar ou reservar. */
+    @Test
+    void quantidadeAcimaDoLimitePorItemEhRecusadaAntesDeCotar() {
+        var comando = new Checkout(List.of(new Item("peca-volumosa", 4)), "padrao", "checkout_pro", enderecoValido());
+
+        assertThatThrownBy(() -> service.checkout(comando, UUID.randomUUID(), "chave-quantidade"))
+                .isInstanceOfSatisfying(PedidoException.class, erro ->
+                        assertThat(erro.tipo()).isEqualTo(PedidoException.Tipo.REQUISICAO_INVALIDA));
+        verifyNoMoreInteractions(catalogo);
+    }
+
     @Test
     void pecaUnicaRepetidaConflitaAntesDeValidarOItemSeguinte() {
         when(catalogo.cotar("unica")).thenReturn(new CatalogoPedidos.Cotacao(new BigDecimal("50.00"),
