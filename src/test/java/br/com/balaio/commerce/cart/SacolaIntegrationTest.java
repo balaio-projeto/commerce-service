@@ -117,7 +117,7 @@ class SacolaIntegrationTest {
         UUID a = UUID.randomUUID(), b = UUID.randomUUID();
         when(decoder.decode("revalidar-a")).thenReturn(jwt("revalidar-a", a, "comprador"));
         when(decoder.decode("revalidar-b")).thenReturn(jwt("revalidar-b", b, "comprador"));
-        when(decoder.decode("revalidar-artesao")).thenReturn(jwt("revalidar-artesao", UUID.randomUUID(), "artesao"));
+        when(decoder.decode("revalidar-organizador")).thenReturn(jwt("revalidar-organizador", UUID.randomUUID(), "organizador"));
         jdbc.update("INSERT INTO sacola_itens(comprador_id, slug, quantidade) VALUES (?, ?, ?), (?, ?, ?)",
                 a, "preco-alterado", 2, a, "peca-excluida", 1);
         var antiga = new CatalogoCliente.Cotacao("preco-alterado", new BigDecimal("42.50"),
@@ -129,7 +129,7 @@ class SacolaIntegrationTest {
                 HttpStatus.NOT_FOUND, "Not Found", HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8));
 
         assertThat(revalidar(null, "{}").statusCode()).isEqualTo(401);
-        assertThat(revalidar("revalidar-artesao", "{}").statusCode()).isEqualTo(403);
+        assertThat(revalidar("revalidar-organizador", "{}").statusCode()).isEqualTo(403);
         assertThat(revalidar("revalidar-b", "{}").body()).contains("\"itens\":[]", "\"podeProsseguir\":false");
         var primeira = revalidar("revalidar-a", "{\"compradorId\":\"" + b + "\",\"preco\":0}");
         assertThat(primeira.statusCode()).isEqualTo(200);
@@ -202,7 +202,7 @@ class SacolaIntegrationTest {
         when(decoder.decode("comprador-a")).thenReturn(jwt("comprador-a", a, "comprador"));
         when(decoder.decode("comprador-a-outra-sessao")).thenReturn(jwt("comprador-a-outra-sessao", a, "comprador"));
         when(decoder.decode("comprador-b")).thenReturn(jwt("comprador-b", b, "comprador"));
-        when(decoder.decode("artesao")).thenReturn(jwt("artesao", UUID.randomUUID(), "artesao"));
+        when(decoder.decode("organizador")).thenReturn(jwt("organizador", UUID.randomUUID(), "organizador"));
         when(catalogo.cotar("peca-unica")).thenReturn(new CatalogoCliente.Cotacao(
                 "peca-unica", new BigDecimal("12.00"), "unica", "ateliê", UUID.randomUUID()));
         when(catalogo.cotar("peca-comum")).thenReturn(new CatalogoCliente.Cotacao(
@@ -212,7 +212,7 @@ class SacolaIntegrationTest {
                 "peca-legada", new BigDecimal("15.00"), "disponivel", "ateliê", null));
 
         assertThat(chamar("GET", null, "").statusCode()).isEqualTo(401);
-        assertThat(chamar("GET", "artesao", "").statusCode()).isEqualTo(403);
+        assertThat(chamar("GET", "organizador", "").statusCode()).isEqualTo(403);
         assertThat(chamar("GET", "comprador-a", "").body()).contains("\"dados\":[]");
         var corpo = "{\"sacola\":[{\"slug\":\"peca-unica\",\"quantidade\":1},{\"slug\":\"peca-comum\",\"quantidade\":3}]}";
         assertThat(chamar("PUT", "comprador-a", corpo).statusCode()).isEqualTo(200);
@@ -234,5 +234,35 @@ class SacolaIntegrationTest {
         assertThat(chamar("GET", "comprador-a", "").body()).contains("\"dados\":[]");
         assertThat(chamar("GET", "comprador-b", "").body()).contains("peca-comum");
         assertThat(chamar("PUT", "comprador-b", "{\"sacola\":[{\"slug\":\"peca-legada\",\"quantidade\":1}]}" ).statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void artesaoMontaSacolaComPecasDeOutrosAteliesMasNaoComAsProprias() throws Exception {
+        UUID artesao = UUID.randomUUID();
+        when(decoder.decode("artesao-comprador")).thenReturn(jwt("artesao-comprador", artesao, "artesao"));
+        when(decoder.decode("admin")).thenReturn(jwt("admin", UUID.randomUUID(), "admin"));
+        when(catalogo.cotar("peca-de-outro-atelie")).thenReturn(new CatalogoCliente.Cotacao(
+                "peca-de-outro-atelie", new BigDecimal("30.00"), "disponivel", "outro", UUID.randomUUID()));
+        when(catalogo.cotar("peca-do-meu-atelie")).thenReturn(new CatalogoCliente.Cotacao(
+                "peca-do-meu-atelie", new BigDecimal("30.00"), "disponivel", "meu", artesao));
+
+        assertThat(chamar("GET", "admin", "").statusCode()).isEqualTo(403);
+        assertThat(chamar("PUT", "admin", "{\"sacola\":[]}").statusCode()).isEqualTo(403);
+        assertThat(revalidar("admin", "{}").statusCode()).isEqualTo(403);
+        assertThat(chamar("PUT", "artesao-comprador",
+                "{\"sacola\":[{\"slug\":\"peca-de-outro-atelie\",\"quantidade\":2}]}").statusCode()).isEqualTo(200);
+        var propria = chamar("PUT", "artesao-comprador", "{\"sacola\":[{\"slug\":\"peca-de-outro-atelie\","
+                + "\"quantidade\":2},{\"slug\":\"peca-do-meu-atelie\",\"quantidade\":1}]}");
+        assertThat(propria.statusCode()).isEqualTo(422);
+        assertThat(propria.body()).contains("PECA_DO_PROPRIO_ATELIE", "Esta peça é do seu ateliê.");
+        assertThat(chamar("GET", "artesao-comprador", "").body()).contains("peca-de-outro-atelie")
+                .doesNotContain("peca-do-meu-atelie");
+        assertThat(revalidar("artesao-comprador", "{}").body()).contains("\"situacao\":\"disponivel\"",
+                "\"podeProsseguir\":true");
+
+        jdbc.update("INSERT INTO sacola_itens(comprador_id, slug, quantidade) VALUES (?, ?, ?)",
+                artesao, "peca-do-meu-atelie", 1);
+        assertThat(revalidar("artesao-comprador", "{}").body()).contains("\"situacao\":\"indisponivel\"",
+                "\"podeProsseguir\":false");
     }
 }

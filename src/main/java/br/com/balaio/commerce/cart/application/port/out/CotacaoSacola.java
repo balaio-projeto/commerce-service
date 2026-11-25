@@ -1,11 +1,12 @@
 package br.com.balaio.commerce.cart.application.port.out;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 public interface CotacaoSacola {
     Cotacao cotarParaSacola(String slug);
 
-    record Cotacao(String slug, BigDecimal preco, String disponibilidade) { }
+    record Cotacao(String slug, BigDecimal preco, String disponibilidade, UUID proprietarioId) { }
 
     enum Falha { PECA_INDISPONIVEL, RESPOSTA_INVALIDA, CATALOGO_INDISPONIVEL }
 

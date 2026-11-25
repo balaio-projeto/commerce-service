@@ -7,6 +7,7 @@ import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.Ch
 import br.com.balaio.commerce.order.application.PedidoService;
 
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos;
+import br.com.balaio.commerce.order.application.port.out.CuponsDoPedido;
 import br.com.balaio.commerce.order.application.port.out.EnderecoSalvo;
 import br.com.balaio.commerce.order.application.port.out.FretePedido;
 import br.com.balaio.commerce.order.integration.FreteDoPedidoAdapter;
@@ -47,7 +48,7 @@ class PedidoServiceValidacaoCheckoutTest {
     private final FretePedido fretes = new FreteDoPedidoAdapter(
             new FreteService(new FreteFixoDemonstrativo(), mock(PrecoPecasFrete.class), mock(OrigemFreteAtelie.class)));
     private final PedidoService service = new PedidoService(mock(PedidoRepository.class), catalogo, mock(EnderecoSalvo.class),
-            mock(TransactionTemplate.class), new FingerprintCheckoutSha256(JsonMapper.builder().build()), fretes);
+            mock(TransactionTemplate.class), new FingerprintCheckoutSha256(JsonMapper.builder().build()), fretes, mock(CuponsDoPedido.class));
 
     @Test
     void pendentesSaoFiltradosEProjetadosNaMesmaConsulta() {
@@ -60,7 +61,7 @@ class PedidoServiceValidacaoCheckoutTest {
             return List.of();
         });
         var pedidos = new PedidoService(new PedidoJdbcRepository(jdbc, JsonMapper.builder().build()), catalogo, mock(EnderecoSalvo.class), mock(TransactionTemplate.class),
-                new FingerprintCheckoutSha256(JsonMapper.builder().build()), fretes);
+                new FingerprintCheckoutSha256(JsonMapper.builder().build()), fretes, mock(CuponsDoPedido.class));
         assertThat(pedidos.listarPendentesArtesao(artesao)).isEmpty();
         verify(jdbc).query(anyString(), any(RowMapper.class), eq(artesao));
         verifyNoMoreInteractions(jdbc);

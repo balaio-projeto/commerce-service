@@ -56,6 +56,11 @@ frete:
     cep-origem: ${MELHORENVIO_CEP_ORIGEM:50030230}
     user-agent: ${MELHORENVIO_USER_AGENT:Balaio homologacao}
     servicos: ${MELHORENVIO_SERVICOS:}
+  local:
+    retirada-ativa: ${FRETE_RETIRADA_ATIVA:true}
+    entrega-ativa: ${FRETE_ENTREGA_LOCAL_ATIVA:true}
+    prefixo-cep-digitos: ${FRETE_ENTREGA_LOCAL_PREFIXO_CEP:5}
+    valor-entrega: ${FRETE_ENTREGA_LOCAL_VALOR:0.00}
   pacote:
     altura-cm: ${FRETE_PACOTE_ALTURA_CM:15}
     largura-cm: ${FRETE_PACOTE_LARGURA_CM:20}

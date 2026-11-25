@@ -40,8 +40,9 @@ public class CheckoutProClient implements PagamentoGateway {
         for (var item : itens)
             linhas.add(Map.of("id", item.slug(), "title", item.slug(), "quantity", item.quantidade(),
                     "unit_price", item.preco(), "currency_id", "BRL"));
-        linhas.add(Map.of("id", "frete", "title", "Entrega", "quantity", 1,
-                "unit_price", frete, "currency_id", "BRL"));
+        if (frete != null && frete.signum() > 0)
+            linhas.add(Map.of("id", "frete", "title", "Entrega", "quantity", 1,
+                    "unit_price", frete, "currency_id", "BRL"));
         String retorno = config.returnUrl() + "/confirmation/" + pedido;
         var corpo = Map.of("items", linhas, "external_reference", pedido.toString(),
                 "back_urls", Map.of("success", retorno, "pending", retorno, "failure", retorno),

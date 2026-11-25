@@ -15,5 +15,6 @@ public interface FilaEmailsPedido {
     int reagendarFalhas(UUID pedido);
     DadosPedido dadosPedido(UUID pedido);
 
-    record DadosPedido(UUID comprador, UUID artesao, BigDecimal total, String rastreio, String transportadora) { }
+    record DadosPedido(UUID comprador, UUID artesao, BigDecimal total, String rastreio, String transportadora,
+            String motivo) { }
 }
