@@ -63,8 +63,9 @@ public class FilaEmailsPedidoJdbcRepository implements FilaEmailsPedido {
 
     @Override
     public DadosPedido dadosPedido(UUID pedido) {
-        return jdbc.queryForObject("SELECT comprador_id, artesao_id, total, rastreio, transportadora FROM pedidos WHERE id = ?",
+        return jdbc.queryForObject("SELECT comprador_id, artesao_id, total, rastreio, transportadora, motivo FROM pedidos WHERE id = ?",
                 (rs, row) -> new DadosPedido((UUID) rs.getObject("comprador_id"), (UUID) rs.getObject("artesao_id"),
-                        rs.getBigDecimal("total"), rs.getString("rastreio"), rs.getString("transportadora")), pedido);
+                        rs.getBigDecimal("total"), rs.getString("rastreio"), rs.getString("transportadora"),
+                        rs.getString("motivo")), pedido);
     }
 }

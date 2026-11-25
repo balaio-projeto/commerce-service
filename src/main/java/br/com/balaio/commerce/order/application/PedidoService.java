@@ -12,11 +12,13 @@ import br.com.balaio.commerce.order.domain.ItemPedido;
 import br.com.balaio.commerce.order.domain.Pedido;
 import br.com.balaio.commerce.order.domain.RegrasCheckout;
 import br.com.balaio.commerce.order.domain.RegrasEnvio;
+import br.com.balaio.commerce.order.domain.TotaisPedido;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.time.OffsetDateTime;
@@ -27,6 +29,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.ErroCatalogo;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.Falha;
+import br.com.balaio.commerce.order.application.port.out.CuponsDoPedido;
 import br.com.balaio.commerce.order.application.port.out.EnderecoSalvo;
 import br.com.balaio.commerce.order.application.port.out.FretePedido;
 import br.com.balaio.commerce.order.application.port.out.PedidoRepository.FreteDoCheckout;
@@ -34,21 +37,26 @@ import br.com.balaio.commerce.order.application.port.out.PedidoRepository.FreteD
 @Service
 public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUseCase,
         ComandosPedidoUseCase, ProcessarPedidosPendentesUseCase {
+    private static final int MAXIMO_ITENS_DA_PREVIA = 20;
+    private static final BigDecimal FRETE_MAXIMO_DA_PREVIA = new BigDecimal("10000");
+    private static final String CUSTEADO_PELA_PLATAFORMA = "plataforma";
     private final PedidoRepository repositorio;
     private final CatalogoPedidos catalogo;
     private final EnderecoSalvo enderecos;
     private final TransactionTemplate transacoes;
     private final FingerprintCheckout fingerprints;
     private final FretePedido fretes;
+    private final CuponsDoPedido cupons;
 
     public PedidoService(PedidoRepository repositorio, CatalogoPedidos catalogo, EnderecoSalvo enderecos,
-            TransactionTemplate transacoes, FingerprintCheckout fingerprints, FretePedido fretes) {
+            TransactionTemplate transacoes, FingerprintCheckout fingerprints, FretePedido fretes, CuponsDoPedido cupons) {
         this.repositorio = repositorio;
         this.catalogo = catalogo;
         this.enderecos = enderecos;
         this.transacoes = transacoes;
         this.fingerprints = fingerprints;
         this.fretes = fretes;
+        this.cupons = cupons;
     }
 
     @Override
@@ -59,8 +67,23 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         UUID existente = transacoes.execute(status -> buscarCheckoutExistente(comprador, chave, fingerprint));
         if (existente != null) return existente;
         validarComando(comando);
-        ItensCotados cotacao = cotarItens(comando.itens());
+        ItensCotados cotacao = cotarItens(comando.itens(), comprador);
         return persistir(comando, comprador, chave, fingerprint, cotacao, escolherFrete(comando, cotacao));
+    }
+
+    @Override
+    public Optional<PreviaCupom> simularCupom(List<Item> itens, String cupom, UUID comprador, BigDecimal frete) {
+        if (comprador == null || itens == null || itens.isEmpty() || itens.size() > MAXIMO_ITENS_DA_PREVIA
+                || (frete != null && (frete.signum() < 0 || frete.compareTo(FRETE_MAXIMO_DA_PREVIA) > 0)))
+            throw new PedidoException(Tipo.REQUISICAO_INVALIDA, "Confira os itens e o frete informados.");
+        ItensCotados cotacao = cotarItens(itens, comprador);
+        BigDecimal freteConsiderado = frete == null ? BigDecimal.ZERO : frete;
+        return cupons.avaliar(cupom, comprador, cotacao.total(), frete).map(previsto -> {
+            var descontos = TotaisPedido.limitar(cotacao.total(), freteConsiderado, previsto.descontoProdutos(),
+                    previsto.descontoFrete());
+            return new PreviaCupom(previsto.codigo(), previsto.descricao(), previsto.tipo(), previsto.automatico(),
+                    cotacao.total(), descontos.produtos(), descontos.frete(), CUSTEADO_PELA_PLATAFORMA);
+        });
     }
 
     @Override
@@ -72,9 +95,9 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         UUID existente = transacoes.execute(status -> buscarCheckoutExistente(comprador, chave, fingerprint));
         if (existente != null) return existente;
         Checkout resolvido = new Checkout(comando.itens(), comando.freteId(), comando.meio(),
-                enderecos.consultar(comando.enderecoId(), tokenComprador), comando.enderecoId());
+                enderecos.consultar(comando.enderecoId(), tokenComprador), comando.enderecoId(), comando.cupom());
         validarComando(resolvido);
-        ItensCotados cotacao = cotarItens(resolvido.itens());
+        ItensCotados cotacao = cotarItens(resolvido.itens(), comprador);
         return persistir(resolvido, comprador, chave, fingerprint, cotacao, escolherFrete(resolvido, cotacao));
     }
 
@@ -93,7 +116,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         return new PedidoException(Tipo.REQUISICAO_INVALIDA, "Confira os itens, endereço, frete e pagamento.");
     }
 
-    private ItensCotados cotarItens(List<Item> itens) {
+    private ItensCotados cotarItens(List<Item> itens, UUID comprador) {
         var slugs = new HashSet<String>();
         var cotados = new ArrayList<ItemPedido>();
         UUID artesao = null;
@@ -101,6 +124,8 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         for (var item : itens) {
             validarItem(item, slugs);
             var cotacao = catalogo.cotar(item.slug());
+            if (RegrasCheckout.pecaDoProprioAtelie(comprador, cotacao.proprietarioId()))
+                throw new PedidoException(Tipo.PECA_DO_PROPRIO_ATELIE, RegrasCheckout.MENSAGEM_PECA_DO_PROPRIO_ATELIE);
             validarCotacao(cotacao, artesao, item.quantidade());
             artesao = cotacao.proprietarioId();
             cotados.add(new ItemPedido(item.slug(), item.quantidade(), cotacao.preco(), cotacao.disponibilidade(), null, null));
@@ -128,12 +153,21 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
 
     private UUID persistir(Checkout comando, UUID comprador, String chave, String fingerprint, ItensCotados cotacao,
             FreteDoCheckout frete) {
+        var cupomPrevisto = cupons.avaliar(comando.cupom(), comprador, cotacao.total(), frete.valor());
         return transacoes.execute(status -> {
             UUID jaCriado = buscarCheckoutExistente(comprador, chave, fingerprint);
             if (jaCriado != null) return jaCriado;
             UUID id = UUID.randomUUID();
+            var cupom = cupomPrevisto.map(previsto -> cupons.reservar(previsto, comprador, cotacao.total(), frete.valor()));
+            var descontos = cupom.map(aplicado -> TotaisPedido.limitar(cotacao.total(), frete.valor(),
+                    aplicado.descontoProdutos(), aplicado.descontoFrete())).orElse(TotaisPedido.Descontos.NENHUM);
             repositorio.criarCheckout(id, comprador, cotacao.artesao(), chave, fingerprint, comando.endereco(),
-                    frete, cotacao.total().add(frete.valor()), comando.meio(), cotacao.itens());
+                    frete, TotaisPedido.total(cotacao.total(), frete.valor(), descontos), comando.meio(), cotacao.itens());
+            cupom.filter(aplicado -> !descontos.vazio()).ifPresent(aplicado -> {
+                repositorio.registrarDesconto(id, aplicado.id(), aplicado.codigo(), aplicado.snapshot(),
+                        descontos.produtos(), descontos.frete());
+                cupons.registrarUso(aplicado, id, comprador, descontos.total());
+            });
             return id;
         });
     }
@@ -192,7 +226,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
     public List<Pendente> listarPendentesArtesao(UUID artesao) {
         return repositorio.pendentesDoArtesao(artesao).stream()
                 .map(pendente -> new Pendente(pendente.id(), pendente.pecaSlug(), pendente.quando(),
-                        pendente.valor())).toList();
+                        pendente.valor(), pendente.compradorId())).toList();
     }
 
     @Override
@@ -239,9 +273,10 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         String anteriorExigido = EstadoPedido.anteriorExigidoPara(destino);
         if (anteriorExigido == null) throw new PedidoException(Tipo.REQUISICAO_INVALIDA, "Estado inválido.");
         boolean envio = "enviado".equals(destino);
-        String codigo = envio ? rastreioValido(rastreio) : null;
-        String empresa = envio ? transportadoraValida(transportadora) : null;
         var pedido = obter(id, true);
+        boolean entregaCombinada = pedido.freteContratado() != null && pedido.freteContratado().entregaCombinada();
+        String codigo = !envio ? null : entregaCombinada && vazio(rastreio) ? null : rastreioValido(rastreio);
+        String empresa = envio ? transportadoraValida(transportadora) : null;
         if (!pedido.artesao().equals(artesao)) throw new PedidoException(Tipo.SEM_PERMISSAO, "Este pedido pertence a outro ateliê.");
         if (pedido.encerramento() != null || !anteriorExigido.equals(pedido.estado()))
             throw new PedidoException(Tipo.PEDIDO_CONFLITANTE, "Transição de pedido inválida.");
@@ -315,7 +350,7 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
     }
 
     private void reservarItens(Pedido pedido) {
-        BigDecimal total = pedido.frete();
+        BigDecimal subtotal = BigDecimal.ZERO;
         for (var item : repositorio.itens(pedido.id())) {
             BigDecimal preco = item.preco();
             if ("unica".equals(item.disponibilidade())) {
@@ -327,9 +362,18 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
                 preco = reserva.preco();
                 repositorio.registrarReserva(pedido.id(), item.slug(), reserva.id(), preco);
             }
-            total = total.add(preco.multiply(BigDecimal.valueOf(item.quantidade())));
+            subtotal = subtotal.add(preco.multiply(BigDecimal.valueOf(item.quantidade())));
         }
-        repositorio.concluirReserva(pedido.id(), total);
+        repositorio.concluirReserva(pedido.id(), totalAposReserva(pedido, subtotal));
+    }
+
+    private BigDecimal totalAposReserva(Pedido pedido, BigDecimal subtotal) {
+        var registrado = repositorio.descontoDoPedido(pedido.id());
+        if (registrado.isEmpty()) return TotaisPedido.total(subtotal, pedido.frete(), TotaisPedido.Descontos.NENHUM);
+        var anterior = new TotaisPedido.Descontos(registrado.get().produtos(), registrado.get().frete());
+        var limitado = TotaisPedido.limitar(subtotal, pedido.frete(), anterior.produtos(), anterior.frete());
+        if (!limitado.mesmoValor(anterior)) repositorio.ajustarDesconto(pedido.id(), limitado.produtos(), limitado.frete());
+        return TotaisPedido.total(subtotal, pedido.frete(), limitado);
     }
 
     private void confirmarItens(Pedido pedido) {
@@ -395,7 +439,13 @@ public class PedidoService implements CheckoutPedidoUseCase, ConsultarPedidosUse
         return new Resumo(pedido.id(), pedido.comprador(), pedido.artesao(), itens.getFirst().slug(),
                 pedido.criadoEm(), pedido.estado(), pedido.total(), pedido.motivo(), historicoInferido, List.copyOf(etapas),
                 itens.stream().map(item -> new ItemResumo(item.slug(), item.quantidade(), item.preco())).toList(),
-                entrega(pedido));
+                entrega(pedido), desconto(pedido));
+    }
+
+    private DescontoResumo desconto(Pedido pedido) {
+        return repositorio.descontoDoPedido(pedido.id()).map(registrado -> new DescontoResumo(registrado.cupomCodigo(),
+                registrado.descricao(), registrado.automatico(), registrado.produtos(), registrado.frete(),
+                registrado.custeadoPor() == null ? CUSTEADO_PELA_PLATAFORMA : registrado.custeadoPor())).orElse(null);
     }
 
     private Entrega entrega(Pedido pedido) {

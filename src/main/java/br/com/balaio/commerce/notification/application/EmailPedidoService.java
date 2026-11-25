@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import br.com.balaio.commerce.notification.application.port.in.EmailsPedidoUseCase;
 import br.com.balaio.commerce.notification.application.port.out.ContatoConta;
 import br.com.balaio.commerce.notification.application.port.out.FilaEmailsPedido;
+import br.com.balaio.commerce.notification.application.port.out.NotificacaoConta;
 import br.com.balaio.commerce.notification.application.port.out.RemetenteEmail;
 import br.com.balaio.commerce.notification.domain.EnvioEmail;
 import br.com.balaio.commerce.notification.domain.ModeloEmailPedido;
@@ -24,6 +25,7 @@ public class EmailPedidoService implements EmailsPedidoUseCase {
     private static final int TAMANHO_LOTE = 20;
     private static final Logger log = LoggerFactory.getLogger(EmailPedidoService.class);
     private final FilaEmailsPedido fila;
+    private final NotificacaoConta notificacoes;
     private final RemetenteEmail remetente;
     private final ContatoConta contatos;
     private final String frontend;
@@ -31,10 +33,12 @@ public class EmailPedidoService implements EmailsPedidoUseCase {
     private final int concorrencia;
 
     public EmailPedidoService(FilaEmailsPedido fila, RemetenteEmail remetente, ContatoConta contatos,
+            NotificacaoConta notificacoes,
             @Value("${balaio.mail.frontend-url:http://localhost:4321}") String frontend,
             @Value("${balaio.mail.paralelo:false}") boolean paralelo,
             @Value("${balaio.mail.concorrencia:8}") int concorrencia) {
         this.fila = fila;
+        this.notificacoes = notificacoes;
         this.remetente = remetente;
         this.contatos = contatos;
         this.frontend = frontend.endsWith("/") ? frontend.substring(0, frontend.length() - 1) : frontend;
@@ -121,9 +125,13 @@ public class EmailPedidoService implements EmailsPedidoUseCase {
 
     private void enviar(EnvioEmail envio) {
         var pedido = fila.dadosPedido(envio.pedido());
-        var contato = contatos.consultar(envio.paraComprador() ? pedido.comprador() : pedido.artesao());
-        var conteudo = ModeloEmailPedido.compor(envio, contato.nome(), pedido.total(), pedido.rastreio(),
-                pedido.transportadora(), frontend);
-        remetente.enviar(contato.email(), conteudo.assunto(), conteudo.texto());
+        UUID conta = envio.paraComprador() ? pedido.comprador() : pedido.artesao();
+        var contato = contatos.consultar(conta);
+        var conteudo = ModeloEmailPedido.compor(envio, contato.nome(), new ModeloEmailPedido.Pedido(pedido.total(),
+                pedido.rastreio(), pedido.transportadora(), pedido.motivo()));
+        var aviso = conteudo.aviso();
+        notificacoes.registrar(conta, envio.evento(), aviso.titulo(), aviso.mensagem(), aviso.link(),
+                "pedido:" + envio.pedido() + ":" + envio.evento() + ":" + envio.destinatario());
+        remetente.enviar(contato.email(), conteudo.assunto(), conteudo.email().texto(frontend), conteudo.email().html(frontend));
     }
 }

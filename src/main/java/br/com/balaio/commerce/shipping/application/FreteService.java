@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import br.com.balaio.commerce.shipping.application.port.in.CotarFreteUseCase;
@@ -18,6 +19,8 @@ import br.com.balaio.commerce.shipping.application.port.out.ProvedorFrete;
 import br.com.balaio.commerce.shipping.domain.Cep;
 import br.com.balaio.commerce.shipping.domain.FreteDemonstrativo;
 import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
+import br.com.balaio.commerce.shipping.domain.OrigemAtelie;
+import br.com.balaio.commerce.shipping.domain.PoliticaFreteLocal;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
 
 @Service
@@ -28,11 +31,19 @@ public class FreteService implements CotarFreteUseCase {
     private final ProvedorFrete provedor;
     private final PrecoPecasFrete pecas;
     private final OrigemFreteAtelie origens;
+    private final PoliticaFreteLocal freteLocal;
 
     public FreteService(ProvedorFrete provedor, PrecoPecasFrete pecas, OrigemFreteAtelie origens) {
+        this(provedor, pecas, origens, PoliticaFreteLocal.padrao());
+    }
+
+    @Autowired
+    public FreteService(ProvedorFrete provedor, PrecoPecasFrete pecas, OrigemFreteAtelie origens,
+            PoliticaFreteLocal freteLocal) {
         this.provedor = provedor;
         this.pecas = pecas;
         this.origens = origens;
+        this.freteLocal = freteLocal;
     }
 
     @Override
@@ -42,7 +53,7 @@ public class FreteService implements CotarFreteUseCase {
 
     @Override
     public boolean reconheceOpcao(String freteId) {
-        return provedor.reconheceOpcao(freteId);
+        return provedor.reconheceOpcao(freteId) || freteLocal.reconhece(freteId);
     }
 
     @Override
@@ -58,14 +69,19 @@ public class FreteService implements CotarFreteUseCase {
             consultadas.add(peca);
             volumes.add(new VolumeFrete(item.slug(), item.quantidade(), peca.preco()));
         }
-        return provedor.cotar(cepOrigem(atelieUnico(consultadas)).orElse(null), destino, volumes);
+        Optional<OrigemAtelie> origem = origemDo(atelieUnico(consultadas));
+        var opcoes = new ArrayList<>(provedor.cotar(cepOrigem(origem), destino, volumes));
+        opcoes.addAll(freteLocal.opcoes(origem, destino));
+        return opcoes;
     }
 
     @Override
     public Escolha escolher(String freteId, String cep, UUID artesao, List<VolumeFrete> volumes) {
         String destino = cepNormalizado(cep);
-        Optional<String> origem = cepOrigem(artesao);
-        var opcao = provedor.cotar(origem.orElse(null), destino, volumes).stream().filter(item -> item.id().equals(freteId))
+        Optional<OrigemAtelie> origem = origemDo(artesao);
+        var candidatas = freteLocal.reconhece(freteId) ? freteLocal.opcoes(origem, destino)
+                : provedor.cotar(cepOrigem(origem), destino, volumes);
+        var opcao = candidatas.stream().filter(item -> item.id().equals(freteId))
                 .findFirst().orElseThrow(() -> new FreteException(FreteException.Tipo.OPCAO_INDISPONIVEL,
                         "A opção de frete escolhida não está mais disponível; cote novamente."));
         var snapshot = new LinkedHashMap<String, Object>();
@@ -78,7 +94,9 @@ public class FreteService implements CotarFreteUseCase {
         snapshot.put("transportadora", opcao.transportadora());
         snapshot.put("provedor", opcao.provedor());
         snapshot.put("cepDestino", destino);
-        snapshot.put("origemFrete", origem.isPresent() ? ORIGEM_ATELIE : ORIGEM_PADRAO);
+        snapshot.put("origemFrete", cepOrigem(origem) != null ? ORIGEM_ATELIE : ORIGEM_PADRAO);
+        snapshot.put("modalidade", opcao.modalidade());
+        snapshot.put("detalhe", opcao.detalhe());
         snapshot.put("cotadoEm", OffsetDateTime.now().toString());
         return new Escolha(opcao, snapshot);
     }
@@ -91,8 +109,12 @@ public class FreteService implements CotarFreteUseCase {
         return ateliesDistintos.isEmpty() ? null : ateliesDistintos.getFirst();
     }
 
-    private Optional<String> cepOrigem(UUID artesao) {
-        return artesao == null ? Optional.empty() : origens.cepOrigem(artesao);
+    private Optional<OrigemAtelie> origemDo(UUID artesao) {
+        return artesao == null ? Optional.empty() : origens.origem(artesao);
+    }
+
+    private String cepOrigem(Optional<OrigemAtelie> origem) {
+        return origem.flatMap(OrigemAtelie::cepNormalizado).orElse(null);
     }
 
     private String cepNormalizado(String cep) {

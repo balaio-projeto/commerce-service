@@ -1,8 +1,12 @@
 package br.com.balaio.commerce.notification.integration;
 
+import java.nio.charset.StandardCharsets;
+
+import jakarta.mail.MessagingException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.MailPreparationException;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 
 import br.com.balaio.commerce.notification.application.port.out.RemetenteEmail;
@@ -18,12 +22,17 @@ public class SmtpRemetenteEmail implements RemetenteEmail {
     }
 
     @Override
-    public void enviar(String destinatario, String assunto, String texto) {
-        var mensagem = new SimpleMailMessage();
-        mensagem.setFrom(remetente);
-        mensagem.setTo(destinatario);
-        mensagem.setSubject(assunto);
-        mensagem.setText(texto);
+    public void enviar(String destinatario, String assunto, String texto, String html) {
+        var mensagem = smtp.createMimeMessage();
+        try {
+            var ajudante = new MimeMessageHelper(mensagem, true, StandardCharsets.UTF_8.name());
+            ajudante.setFrom(remetente);
+            ajudante.setTo(destinatario);
+            ajudante.setSubject(assunto);
+            ajudante.setText(texto, html);
+        } catch (MessagingException falha) {
+            throw new MailPreparationException("Não foi possível montar o e-mail.", falha);
+        }
         smtp.send(mensagem);
     }
 }

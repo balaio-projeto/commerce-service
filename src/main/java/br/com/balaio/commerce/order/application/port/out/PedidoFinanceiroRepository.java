@@ -13,6 +13,7 @@ public interface PedidoFinanceiroRepository {
     List<ItemCobranca> itensParaCobranca(UUID id);
     BigDecimal freteParaCobranca(UUID id);
     BigDecimal totalParaCobranca(UUID id);
+    DescontoCobranca descontoParaCobranca(UUID id);
     String estadoParaPagamento(UUID id);
     String travarPedidoParaPagamento(UUID id);
     boolean cancelamentoSemPagamentoExpirou(UUID id);
@@ -20,4 +21,6 @@ public interface PedidoFinanceiroRepository {
     void mudarEstadoFinanceiro(UUID id, String estado, String causa);
     boolean mudarEstadoFinanceiroSe(UUID id, String anterior, String destino, String causa);
     void encerrarPagamentoExpirado(UUID id);
+
+    record DescontoCobranca(BigDecimal produtos, BigDecimal frete) { }
 }

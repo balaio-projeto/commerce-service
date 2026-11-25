@@ -1,7 +1,7 @@
 package br.com.balaio.commerce.cart.application;
 
 public class SacolaException extends RuntimeException {
-    public enum Tipo { REQUISICAO_INVALIDA, PECA_INDISPONIVEL, CATALOGO_INDISPONIVEL }
+    public enum Tipo { REQUISICAO_INVALIDA, PECA_INDISPONIVEL, PECA_DO_PROPRIO_ATELIE, CATALOGO_INDISPONIVEL }
 
     private final Tipo tipo;
 

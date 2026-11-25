@@ -115,11 +115,12 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
 
     @Override
     public List<PendenteArtesao> pendentesDoArtesao(UUID artesao) {
-        return jdbc.query("SELECT p.id, p.criado_em, p.total, "
+        return jdbc.query("SELECT p.id, p.criado_em, p.total + p.desconto_produtos + p.desconto_frete AS total, p.comprador_id, "
                         + "(SELECT i.slug FROM pedido_itens i WHERE i.pedido_id = p.id ORDER BY i.slug LIMIT 1) AS peca_slug "
                         + "FROM pedidos p WHERE p.artesao_id = ? AND p.estado = 'confirmado' ORDER BY p.criado_em DESC",
                 (rs, row) -> new PendenteArtesao((UUID) rs.getObject("id"), rs.getString("peca_slug"),
-                        rs.getObject("criado_em", OffsetDateTime.class), rs.getBigDecimal("total")), artesao);
+                        rs.getObject("criado_em", OffsetDateTime.class), rs.getBigDecimal("total"),
+                        (UUID) rs.getObject("comprador_id")), artesao);
     }
 
     @Override
@@ -143,6 +144,44 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
         for (var item : itens)
             jdbc.update("INSERT INTO pedido_itens(pedido_id, slug, quantidade, preco, disponibilidade) VALUES (?, ?, ?, ?, ?)",
                     id, item.slug(), item.quantidade(), item.preco(), item.disponibilidade());
+    }
+
+    @Override
+    public void registrarDesconto(UUID id, UUID cupomId, String cupomCodigo, Map<String, Object> snapshot,
+            BigDecimal descontoProdutos, BigDecimal descontoFrete) {
+        try {
+            jdbc.update("UPDATE pedidos SET cupom_id = ?, cupom_codigo = ?, cupom_snapshot = CAST(? AS jsonb), "
+                    + "desconto_produtos = ?, desconto_frete = ? WHERE id = ?", cupomId, cupomCodigo,
+                    json.writeValueAsString(snapshot), descontoProdutos, descontoFrete, id);
+        } catch (JacksonException exception) {
+            throw new IllegalStateException("Snapshot do cupom inválido.", exception);
+        }
+    }
+
+    @Override
+    public Optional<DescontoRegistrado> descontoDoPedido(UUID id) {
+        return jdbc.query("SELECT cupom_codigo, cupom_snapshot::text AS snapshot, desconto_produtos, desconto_frete "
+                + "FROM pedidos WHERE id = ? AND cupom_id IS NOT NULL", (rs, row) -> {
+                    JsonNode snapshot = snapshotDoCupom(rs.getString("snapshot"));
+                    return new DescontoRegistrado(rs.getString("cupom_codigo"), texto(snapshot, "descricao"),
+                            snapshot.path("automatico").asBoolean(false), rs.getBigDecimal("desconto_produtos"),
+                            rs.getBigDecimal("desconto_frete"), texto(snapshot, "custeadoPor"));
+                }, id).stream().findFirst();
+    }
+
+    private JsonNode snapshotDoCupom(String texto) {
+        try {
+            return texto == null ? json.createObjectNode() : json.readTree(texto);
+        } catch (JacksonException invalido) {
+            return json.createObjectNode();
+        }
+    }
+
+    @Override
+    public void ajustarDesconto(UUID id, BigDecimal descontoProdutos, BigDecimal descontoFrete) {
+        jdbc.update("UPDATE pedidos SET desconto_produtos = ?, desconto_frete = ? WHERE id = ?",
+                descontoProdutos, descontoFrete, id);
+        jdbc.update("UPDATE cupom_usos SET desconto = ? WHERE pedido_id = ?", descontoProdutos.add(descontoFrete), id);
     }
 
     @Override
@@ -296,6 +335,12 @@ public class PedidoJdbcRepository implements PedidoRepository, PedidoFinanceiroR
     @Override
     public BigDecimal totalParaCobranca(UUID id) {
         return jdbc.queryForObject("SELECT total FROM pedidos WHERE id = ?", BigDecimal.class, id);
+    }
+
+    @Override
+    public DescontoCobranca descontoParaCobranca(UUID id) {
+        return jdbc.queryForObject("SELECT desconto_produtos, desconto_frete FROM pedidos WHERE id = ?",
+                (rs, row) -> new DescontoCobranca(rs.getBigDecimal(1), rs.getBigDecimal(2)), id);
     }
 
     @Override

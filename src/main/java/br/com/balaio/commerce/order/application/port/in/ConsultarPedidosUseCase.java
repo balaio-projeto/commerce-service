@@ -17,12 +17,25 @@ public interface ConsultarPedidosUseCase {
     record Detalhe(Resumo pedido, Object endereco) { }
     record Resumo(UUID id, UUID compradorId, UUID artesaoId, String pecaSlug, OffsetDateTime criadoEm,
             String estado, BigDecimal total, String motivoEncerramento, boolean historicoInferido,
-            List<Etapa> etapas, List<ItemResumo> itens, Entrega entrega) { }
+            List<Etapa> etapas, List<ItemResumo> itens, Entrega entrega, DescontoResumo desconto) {
+        public Resumo(UUID id, UUID compradorId, UUID artesaoId, String pecaSlug, OffsetDateTime criadoEm,
+                String estado, BigDecimal total, String motivoEncerramento, boolean historicoInferido,
+                List<Etapa> etapas, List<ItemResumo> itens, Entrega entrega) {
+            this(id, compradorId, artesaoId, pecaSlug, criadoEm, estado, total, motivoEncerramento, historicoInferido,
+                    etapas, itens, entrega, null);
+        }
+    }
+    record DescontoResumo(String cupomCodigo, String descricao, boolean automatico, BigDecimal produtos,
+            BigDecimal frete, String custeadoPor) {
+        public BigDecimal total() {
+            return produtos.add(frete);
+        }
+    }
     record Entrega(BigDecimal frete, String rastreio, String transportadora, String freteOpcao,
             String freteProvedor, String previsaoEntrega) { }
     record Etapa(String estado, String titulo, String detalhe, String nota, OffsetDateTime criadaEm,
             boolean concluida, boolean atual, boolean inferida) { }
     record ItemResumo(String slug, int quantidade, BigDecimal preco) { }
     record Participantes(UUID compradorId, UUID artesaoId) { }
-    record Pendente(UUID id, String pecaSlug, OffsetDateTime criadoEm, BigDecimal valor) { }
+    record Pendente(UUID id, String pecaSlug, OffsetDateTime criadoEm, BigDecimal valor, UUID compradorId) { }
 }

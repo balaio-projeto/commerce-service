@@ -10,6 +10,9 @@ import br.com.balaio.commerce.dashboard.domain.PeriodoInvalido;
 import br.com.balaio.commerce.order.application.port.out.CatalogoPedidos.ErroCatalogo;
 import br.com.balaio.commerce.payment.api.WebhookInvalido;
 import br.com.balaio.commerce.payment.application.PagamentoIndisponivel;
+import br.com.balaio.commerce.promotion.application.CupomInvalido;
+import br.com.balaio.commerce.promotion.application.CupomNaoEncontrado;
+import br.com.balaio.commerce.promotion.application.CupomRecusado;
 import br.com.balaio.commerce.shared.security.AcessoNegado;
 import br.com.balaio.commerce.shipping.application.FreteException;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +30,7 @@ public class ApiErrorHandler {
         int status = switch (erro.tipo()) {
             case REQUISICAO_INVALIDA -> 400;
             case PECA_INDISPONIVEL -> 409;
+            case PECA_DO_PROPRIO_ATELIE -> 422;
             case CATALOGO_INDISPONIVEL -> 503;
         };
         return resposta(status, erro.tipo().name(), erro.getMessage());
@@ -40,7 +44,7 @@ public class ApiErrorHandler {
             case PEDIDO_NAO_ENCONTRADO, ENDERECO_NAO_ENCONTRADO -> 404;
             case PEDIDO_CONFLITANTE, CHECKOUT_CONFLITANTE, MEDIACAO_NECESSARIA,
                     MEDIACAO_CONFLITANTE, RESERVA_CONFLITANTE -> 409;
-            case ENDERECO_INCOMPLETO -> 422;
+            case ENDERECO_INCOMPLETO, PECA_DO_PROPRIO_ATELIE -> 422;
             case PERFIL_INDISPONIVEL -> 503;
         };
         return resposta(status, erro.codigo(), erro.getMessage());
@@ -54,6 +58,24 @@ public class ApiErrorHandler {
             case COTACAO_INDISPONIVEL, CATALOGO_INDISPONIVEL -> 503;
         };
         return resposta(status, erro.codigo(), erro.getMessage());
+    }
+
+    @ExceptionHandler(CupomRecusado.class)
+    public ResponseEntity<Map<String, Object>> cupomRecusado(CupomRecusado erro) {
+        return resposta(422, erro.codigo(), erro.getMessage());
+    }
+
+    @ExceptionHandler(CupomInvalido.class)
+    public ResponseEntity<Map<String, Object>> cupomInvalido(CupomInvalido erro) {
+        var corpo = new LinkedHashMap<String, Object>();
+        corpo.put("dados", null);
+        corpo.put("erro", Map.of("codigo", "CUPOM_INVALIDO", "mensagem", erro.getMessage(), "campos", erro.campos()));
+        return ResponseEntity.status(400).body(corpo);
+    }
+
+    @ExceptionHandler(CupomNaoEncontrado.class)
+    public ResponseEntity<Map<String, Object>> cupomNaoEncontrado(CupomNaoEncontrado erro) {
+        return resposta(404, "CUPOM_NAO_ENCONTRADO", erro.getMessage());
     }
 
     @ExceptionHandler(PeriodoInvalido.class)

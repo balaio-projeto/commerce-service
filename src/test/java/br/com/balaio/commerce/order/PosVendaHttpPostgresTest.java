@@ -2,6 +2,9 @@ package br.com.balaio.commerce.order;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -52,7 +55,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mail.MailSendException;
-import org.springframework.mail.SimpleMailMessage;
+import jakarta.mail.Message;
+import jakarta.mail.Multipart;
+import jakarta.mail.Part;
+import jakarta.mail.internet.MimeMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -63,6 +69,7 @@ import br.com.balaio.commerce.dashboard.domain.PeriodoRelatorio;
 import br.com.balaio.commerce.integration.catalogo.CatalogoCliente;
 import br.com.balaio.commerce.notification.application.EmailPedidoService;
 import br.com.balaio.commerce.notification.application.port.out.ContatoConta;
+import br.com.balaio.commerce.notification.application.port.out.NotificacaoConta;
 import br.com.balaio.commerce.order.application.PedidoException;
 import br.com.balaio.commerce.order.application.PedidoService;
 import br.com.balaio.commerce.order.application.port.in.CheckoutPedidoUseCase.Checkout;
@@ -71,6 +78,7 @@ import br.com.balaio.commerce.payment.application.CheckoutProService;
 import br.com.balaio.commerce.payment.application.port.out.PagamentoGateway;
 import br.com.balaio.commerce.shipping.application.FreteException;
 import br.com.balaio.commerce.shipping.application.port.out.OrigemFreteAtelie;
+import br.com.balaio.commerce.shipping.domain.OrigemAtelie;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -131,6 +139,7 @@ class PosVendaHttpPostgresTest {
     @MockitoBean PagamentoGateway provedor;
     @MockitoBean JavaMailSender smtp;
     @MockitoBean ContatoConta contatos;
+    @MockitoBean NotificacaoConta notificacoes;
     @MockitoBean OrigemFreteAtelie origensFrete;
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -145,6 +154,7 @@ class PosVendaHttpPostgresTest {
         });
         when(contatos.consultar(any())).thenAnswer(chamada ->
                 new ContatoConta.Contato("Pessoa", chamada.getArgument(0) + "@teste.local"));
+        when(smtp.createMimeMessage()).thenAnswer(chamada -> new MimeMessage((jakarta.mail.Session) null));
     }
 
     @Test
@@ -197,9 +207,9 @@ class PosVendaHttpPostgresTest {
         assertThat(jdbc.queryForList("SELECT evento || ':' || destinatario FROM pedido_emails WHERE pedido_id = ? "
                 + "ORDER BY evento, destinatario", String.class, id)).containsExactly(
                 "entregue:comprador", "enviado:comprador", "pagamento_confirmado:artesao",
-                "pagamento_confirmado:comprador");
+                "pagamento_confirmado:comprador", "producao:comprador");
         jdbc.update("UPDATE pedido_emails SET estado = 'enviado' WHERE pedido_id <> ?", id);
-        doThrow(new MailSendException("smtp fora do ar")).when(smtp).send(any(SimpleMailMessage.class));
+        doThrow(new MailSendException("smtp fora do ar")).when(smtp).send(any(MimeMessage.class));
         assertThat(emails.processarPendentes()).isZero();
         var falhas = jdbc.queryForList("SELECT estado, tentativas, ultimo_erro FROM pedido_emails WHERE pedido_id = ?", id);
         assertThat(falhas).allSatisfy(linha -> {
@@ -209,26 +219,32 @@ class PosVendaHttpPostgresTest {
         });
         assertThat(emails.processarPendentes()).isZero();
         reset(smtp);
+        when(smtp.createMimeMessage()).thenAnswer(chamada -> new MimeMessage((jakarta.mail.Session) null));
         jdbc.update("UPDATE pedido_emails SET proxima_tentativa_em = now() WHERE pedido_id = ?", id);
         emails.processarPendentes();
         emails.processarPendentes();
-        var enviados = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(smtp, times(4)).send(enviados.capture());
+        var enviados = ArgumentCaptor.forClass(MimeMessage.class);
+        verify(smtp, times(5)).send(enviados.capture());
         var doPedido = enviados.getAllValues();
         assertThat(doPedido).anySatisfy(mensagem -> {
-            assertThat(mensagem.getTo()).containsExactly(comprador + "@teste.local");
+            assertThat(destinatarios(mensagem)).containsExactly(comprador + "@teste.local");
             assertThat(mensagem.getSubject()).startsWith("Balaio · Pedido enviado");
-            assertThat(mensagem.getText()).contains("ME123456789BR", "Correios", "http://localhost:4321/orders/" + id);
+            assertThat(parte(mensagem, "text/plain")).contains("ME123456789BR", "Correios", "http://localhost:4321/orders/" + id);
+            assertThat(parte(mensagem, "text/html")).contains("ME123456789BR", "Seu pedido foi enviado", "balaio-logo.png");
         });
         assertThat(doPedido).anySatisfy(mensagem -> {
-            assertThat(mensagem.getTo()).containsExactly(artesao + "@teste.local");
+            assertThat(destinatarios(mensagem)).containsExactly(artesao + "@teste.local");
             assertThat(mensagem.getSubject()).startsWith("Balaio · Novo pedido pago");
         });
+        verify(notificacoes, atLeastOnce()).registrar(eq(comprador), eq("enviado"), eq("Pedido enviado"), contains("ME123456789BR"),
+                eq("/orders/" + id), eq("pedido:" + id + ":enviado:comprador"));
+        verify(notificacoes, atLeastOnce()).registrar(eq(artesao), eq("pagamento_confirmado"), eq("Novo pedido pago"), any(),
+                eq("/dashboard"), eq("pedido:" + id + ":pagamento_confirmado:artesao"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pedido_emails WHERE pedido_id = ? AND estado = 'enviado'",
-                Integer.class, id)).isEqualTo(4);
+                Integer.class, id)).isEqualTo(5);
         var situacao = chamarInterno("GET", "/internal/v1/pedidos/" + id + "/emails", TOKEN_INTERNO);
         assertThat(situacao.statusCode()).isEqualTo(200);
-        assertThat(json.readTree(situacao.body()).path("dados").size()).isEqualTo(4);
+        assertThat(json.readTree(situacao.body()).path("dados").size()).isEqualTo(5);
         assertThat(chamarInterno("GET", "/internal/v1/pedidos/" + id + "/emails", null).statusCode()).isEqualTo(403);
     }
 
@@ -244,10 +260,10 @@ class PosVendaHttpPostgresTest {
         var reenvio = chamarInterno("POST", "/internal/v1/pedidos/" + id + "/emails/reenviar", TOKEN_INTERNO);
         assertThat(json.readTree(reenvio.body()).path("dados").path("reagendados").asInt()).isEqualTo(1);
         emails.processarPendentes();
-        var enviados = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        var enviados = ArgumentCaptor.forClass(MimeMessage.class);
         verify(smtp).send(enviados.capture());
         assertThat(enviados.getAllValues()).singleElement().satisfies(mensagem ->
-                        assertThat(mensagem.getTo()).containsExactly(comprador + "@teste.local"));
+                        assertThat(destinatarios(mensagem)).containsExactly(comprador + "@teste.local"));
     }
 
     @Test
@@ -256,7 +272,7 @@ class PosVendaHttpPostgresTest {
         String slug = "jarra-frete-" + UUID.randomUUID();
         when(catalogo.cotar(slug)).thenReturn(new CatalogoCliente.Cotacao(slug, new BigDecimal("80.00"),
                 "disponivel", "atelie", artesao));
-        when(origensFrete.cepOrigem(artesao)).thenReturn(Optional.of("56800000"));
+        when(origensFrete.origem(artesao)).thenReturn(Optional.of(OrigemAtelie.somenteCep("56800000")));
         var resposta = chamar("GET", "/api/v1/fretes?cep=01310-100&itens=" + slug + ":2", null, null);
         assertThat(resposta.statusCode()).isEqualTo(200);
         JsonNode opcoes = json.readTree(resposta.body()).path("dados");
@@ -535,5 +551,21 @@ class PosVendaHttpPostgresTest {
         } catch (Exception exception) {
             throw new IllegalStateException(exception);
         }
+    }
+
+    private static java.util.List<String> destinatarios(MimeMessage mensagem) throws Exception {
+        return java.util.Arrays.stream(mensagem.getRecipients(Message.RecipientType.TO)).map(Object::toString).toList();
+    }
+
+    private static String parte(Part parte, String tipo) throws Exception {
+        if (parte instanceof MimeMessage mensagem) mensagem.saveChanges();
+        if (parte.getContent() instanceof Multipart multipart) {
+            for (int i = 0; i < multipart.getCount(); i++) {
+                String encontrada = parte(multipart.getBodyPart(i), tipo);
+                if (encontrada != null) return encontrada;
+            }
+            return null;
+        }
+        return parte.isMimeType(tipo) ? parte.getContent().toString() : null;
     }
 }

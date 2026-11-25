@@ -17,7 +17,7 @@ public class CotacaoSacolaHttpAdapter implements CotacaoSacola {
     public Cotacao cotarParaSacola(String slug) {
         try {
             var cotacao = catalogo.cotar(slug);
-            return new Cotacao(cotacao.slug(), cotacao.preco(), cotacao.disponibilidade());
+            return new Cotacao(cotacao.slug(), cotacao.preco(), cotacao.disponibilidade(), cotacao.proprietarioId());
         } catch (HttpClientErrorException.NotFound | HttpClientErrorException.Conflict erro) {
             throw new ErroCotacao(Falha.PECA_INDISPONIVEL, erro);
         } catch (IllegalArgumentException | IllegalStateException erro) {

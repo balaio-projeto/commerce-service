@@ -11,6 +11,8 @@ public final class RegrasCheckout {
             "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
             "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO");
     private static final List<String> CAMPOS_ENDERECO = List.of("cep", "endereco", "cidade", "estado");
+    public static final String MENSAGEM_PECA_DO_PROPRIO_ATELIE =
+            "Esta peça é do seu ateliê. Não é possível comprar peças do próprio ateliê.";
     private static final Pattern CEP = Pattern.compile("[0-9]{5}-?[0-9]{3}");
 
     private RegrasCheckout() { }
@@ -31,6 +33,10 @@ public final class RegrasCheckout {
     public static boolean cotacaoCompativel(UUID proprietario, UUID artesao, String disponibilidade, int quantidade) {
         return proprietario != null && (artesao == null || artesao.equals(proprietario))
                 && (!"unica".equals(disponibilidade) || quantidade == 1);
+    }
+
+    public static boolean pecaDoProprioAtelie(UUID comprador, UUID proprietario) {
+        return comprador != null && comprador.equals(proprietario);
     }
 
     private static boolean enderecoValido(Map<String, String> endereco) {

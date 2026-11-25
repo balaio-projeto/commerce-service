@@ -4,6 +4,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -26,9 +27,11 @@ public class FingerprintCheckoutSha256 implements FingerprintCheckout {
     @Override
     public String calcular(Checkout comando) {
         try {
-            Object identidade = comando.enderecoId() == null
+            Object endereco = comando.enderecoId() == null
                     ? new FingerprintEnderecoManual(comando.itens(), comando.freteId(), comando.meio(), comando.endereco())
                     : new FingerprintEnderecoSalvo(comando.itens(), comando.freteId(), comando.meio(), comando.enderecoId());
+            Object identidade = comando.cupom() == null || comando.cupom().isBlank()
+                    ? endereco : new FingerprintComCupom(endereco, comando.cupom().trim().toUpperCase(Locale.ROOT));
             byte[] dados = json.writeValueAsBytes(identidade);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(dados));
         } catch (JacksonException | NoSuchAlgorithmException exception) {
@@ -40,4 +43,5 @@ public class FingerprintCheckoutSha256 implements FingerprintCheckout {
     private record FingerprintEnderecoManual(List<Item> itens, String freteId, String meio,
             Map<String, String> endereco) { }
     private record FingerprintEnderecoSalvo(List<Item> itens, String freteId, String meio, UUID enderecoId) { }
+    private record FingerprintComCupom(Object checkout, String cupom) { }
 }
