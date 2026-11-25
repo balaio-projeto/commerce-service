@@ -37,6 +37,10 @@ balaio:
   painel:
     catalogo-timeout-ms: ${COMMERCE_PAINEL_CATALOGO_TIMEOUT_MS:800}
     paralelo: ${BALAIO_PAINEL_PARALELO:true}
+  pagamento:
+    simulador:
+      # Só para desenvolvimento: provedor de pagamento simulado. Não pode coexistir com Mercado Pago.
+      ativo: ${BALAIO_PAGAMENTO_SIMULADOR_ATIVO:false}
 payment:
   mercadopago:
     environment: ${MERCADOPAGO_ENVIRONMENT:}
