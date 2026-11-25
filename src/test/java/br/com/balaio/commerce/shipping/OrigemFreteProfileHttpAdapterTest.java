@@ -83,6 +83,21 @@ class OrigemFreteProfileHttpAdapterTest {
     }
 
     @Test
+    void leRetiradaEEntregaLocalSemExigirCep() {
+        resposta.set("{\"dados\":{\"cepOrigem\":null,\"aceitaRetirada\":true,\"aceitaEntregaLocal\":true,"
+                + "\"retiradaBairro\":\" Boa Viagem \",\"retiradaCidade\":\"Recife\"},\"erro\":null}");
+
+        assertThat(adaptador(TOKEN).origem(UUID.randomUUID())).hasValueSatisfying(origem -> {
+            assertThat(origem.cep()).isNull();
+            assertThat(origem.aceitaRetirada()).isTrue();
+            assertThat(origem.aceitaEntregaLocal()).isTrue();
+            assertThat(origem.bairro()).isEqualTo("Boa Viagem");
+            assertThat(origem.cidade()).isEqualTo("Recife");
+            assertThat(origem.retiradaDisponivel()).isTrue();
+        });
+    }
+
+    @Test
     void semTokenInternoOuSemArtesaoNaoChamaProfile() {
         assertThat(adaptador("curto").cepOrigem(UUID.randomUUID())).isEmpty();
         assertThat(adaptador(TOKEN).cepOrigem(null)).isEmpty();

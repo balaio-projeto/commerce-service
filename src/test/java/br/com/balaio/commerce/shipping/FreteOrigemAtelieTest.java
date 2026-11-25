@@ -24,6 +24,7 @@ import br.com.balaio.commerce.shipping.application.port.out.OrigemFreteAtelie;
 import br.com.balaio.commerce.shipping.application.port.out.PrecoPecasFrete.PecaFrete;
 import br.com.balaio.commerce.shipping.application.port.out.ProvedorFrete;
 import br.com.balaio.commerce.shipping.domain.OpcaoFrete;
+import br.com.balaio.commerce.shipping.domain.OrigemAtelie;
 import br.com.balaio.commerce.shipping.domain.VolumeFrete;
 
 class FreteOrigemAtelieTest {
@@ -41,18 +42,18 @@ class FreteOrigemAtelieTest {
 
     @Test
     void cotacaoPublicaUsaCepDeOrigemDoAtelieDasPecas() {
-        when(origens.cepOrigem(ATELIE)).thenReturn(Optional.of("56800000"));
+        when(origens.origem(ATELIE)).thenReturn(Optional.of(OrigemAtelie.somenteCep("56800000")));
 
         var opcoes = service.cotar("01310-100", List.of(new ItemCotacao("jarra", 2), new ItemCotacao("vaso", 1)));
 
         assertThat(opcoes).singleElement().satisfies(opcao -> assertThat(opcao.id()).isEqualTo("me-1"));
         assertThat(origensCotadas).containsExactly("56800000");
-        verify(origens).cepOrigem(ATELIE);
+        verify(origens).origem(ATELIE);
     }
 
     @Test
     void atelieSemCepOuProfileIndisponivelCaiNoCepPadrao() {
-        when(origens.cepOrigem(ATELIE)).thenReturn(Optional.empty());
+        when(origens.origem(ATELIE)).thenReturn(Optional.empty());
 
         service.cotar("01310100", List.of(new ItemCotacao("jarra", 1)));
 
@@ -67,7 +68,7 @@ class FreteOrigemAtelieTest {
                     assertThat(erro.tipo()).isEqualTo(FreteException.Tipo.ATELIES_DIFERENTES);
                     assertThat(erro.codigo()).isEqualTo("ATELIES_DIFERENTES");
                 });
-        verify(origens, never()).cepOrigem(any());
+        verify(origens, never()).origem(any());
         assertThat(origensCotadas).isEmpty();
     }
 
@@ -76,13 +77,13 @@ class FreteOrigemAtelieTest {
         service.cotar("01310100", List.of());
         service.cotar("01310100", List.of(new ItemCotacao("sem-dono", 1)));
 
-        verify(origens, never()).cepOrigem(any());
+        verify(origens, never()).origem(any());
         assertThat(origensCotadas).containsExactly(null, null);
     }
 
     @Test
     void escolhaDoCheckoutUsaOrigemDoArtesaoDoPedidoERegistraNoSnapshot() {
-        when(origens.cepOrigem(ATELIE)).thenReturn(Optional.of("56800000"));
+        when(origens.origem(ATELIE)).thenReturn(Optional.of(OrigemAtelie.somenteCep("56800000")));
         var volumes = List.of(new VolumeFrete("jarra", 1, new BigDecimal("80.00")));
 
         var doAtelie = service.escolher("me-1", "52021-030", ATELIE, volumes);

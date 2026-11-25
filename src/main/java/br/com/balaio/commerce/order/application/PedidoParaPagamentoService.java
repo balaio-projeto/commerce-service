@@ -1,6 +1,7 @@
 package br.com.balaio.commerce.order.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.UUID;
 
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class PedidoParaPagamentoService implements PedidoParaPagamento {
+    public static final String LINHA_PECAS_COM_CUPOM = "pecas-com-desconto-balaio";
     private final PedidoFinanceiroRepository repositorio;
     private final ProcessarPedidosPendentesUseCase pedidos;
 
@@ -22,12 +24,21 @@ public class PedidoParaPagamentoService implements PedidoParaPagamento {
 
     @Override
     public List<ItemCobranca> itensParaCobranca(UUID id) {
-        return repositorio.itensParaCobranca(id);
+        var itens = repositorio.itensParaCobranca(id);
+        BigDecimal descontoProdutos = repositorio.descontoParaCobranca(id).produtos();
+        if (descontoProdutos == null || descontoProdutos.signum() == 0) return itens;
+        BigDecimal pecasComDesconto = itens.stream().map(item -> item.preco().multiply(BigDecimal.valueOf(item.quantidade())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add).subtract(descontoProdutos);
+        return pecasComDesconto.signum() > 0
+                ? List.of(new ItemCobranca(LINHA_PECAS_COM_CUPOM, 1, pecasComDesconto.setScale(2, RoundingMode.HALF_UP)))
+                : List.of();
     }
 
     @Override
     public BigDecimal freteParaCobranca(UUID id) {
-        return repositorio.freteParaCobranca(id);
+        BigDecimal descontoFrete = repositorio.descontoParaCobranca(id).frete();
+        BigDecimal frete = repositorio.freteParaCobranca(id);
+        return descontoFrete == null ? frete : frete.subtract(descontoFrete);
     }
 
     @Override

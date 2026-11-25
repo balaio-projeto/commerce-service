@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
 import br.com.balaio.commerce.shipping.application.port.out.ProvedorFrete;
+import br.com.balaio.commerce.shipping.domain.PoliticaFreteLocal;
 
 @Configuration(proxyBeanMethods = false)
 public class ProvedorFreteConfig {
@@ -25,5 +26,14 @@ public class ProvedorFreteConfig {
         if (token == null || token.isBlank()) return new FreteFixoDemonstrativo();
         return new MelhorEnvioClient(builder, baseUrl, token.trim(), cepOrigem, userAgent, servicos,
                 new MelhorEnvioClient.Pacote(altura, largura, comprimento, peso));
+    }
+
+    @Bean
+    public PoliticaFreteLocal politicaFreteLocal(
+            @Value("${frete.local.retirada-ativa:true}") boolean retiradaAtiva,
+            @Value("${frete.local.entrega-ativa:true}") boolean entregaLocalAtiva,
+            @Value("${frete.local.prefixo-cep-digitos:5}") int digitosDoPrefixoCep,
+            @Value("${frete.local.valor-entrega:0.00}") BigDecimal valorEntregaLocal) {
+        return new PoliticaFreteLocal(retiradaAtiva, entregaLocalAtiva, digitosDoPrefixoCep, valorEntregaLocal);
     }
 }

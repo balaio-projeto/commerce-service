@@ -75,7 +75,7 @@ class EmailPedidoServiceTest {
         @Override
         public DadosPedido dadosPedido(UUID pedido) {
             var comprador = pedido.equals(pedidoQueFalha) ? CONTA_FALHA : COMPRADOR;
-            return new DadosPedido(comprador, ARTESAO, BigDecimal.TEN, "BR123", "Correios");
+            return new DadosPedido(comprador, ARTESAO, BigDecimal.TEN, "BR123", "Correios", null);
         }
 
         Map<String, String> estadosFinais() {
@@ -99,7 +99,7 @@ class EmailPedidoServiceTest {
         }
 
         @Override
-        public void enviar(String destinatario, String assunto, String texto) {
+        public void enviar(String destinatario, String assunto, String texto, String html) {
             int atual = emVoo.incrementAndGet();
             pico.accumulateAndGet(atual, Math::max);
             try {
@@ -132,7 +132,8 @@ class EmailPedidoServiceTest {
     }
 
     private static EmailPedidoService servico(FilaMemoria fila, RemetenteFake remetente, boolean paralelo, int concorrencia) {
-        return new EmailPedidoService(fila, remetente, contatos(), "http://localhost:4321", paralelo, concorrencia);
+        return new EmailPedidoService(fila, remetente, contatos(), (conta, tipo, titulo, mensagem, link, chave) -> { },
+                "http://localhost:4321", paralelo, concorrencia);
     }
 
     @Test

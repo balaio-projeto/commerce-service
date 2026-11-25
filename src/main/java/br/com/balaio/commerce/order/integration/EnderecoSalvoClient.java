@@ -44,7 +44,11 @@ public class EnderecoSalvoClient implements EnderecoSalvo {
             String estado = partes[partes.length - 1].toUpperCase();
             String cidade = partes[partes.length - 2];
             String bairro = String.join(", ", Arrays.copyOf(partes, partes.length - 2));
-            return Map.of("cep", cep, "endereco", bairro.isBlank() ? rua : rua + ", " + bairro,
+            String numero = opcional(dados.get("numero"));
+            String complemento = opcional(dados.get("complemento"));
+            String logradouro = rua + (numero.isEmpty() ? "" : ", " + numero)
+                    + (complemento.isEmpty() ? "" : " - " + complemento);
+            return Map.of("cep", cep, "endereco", bairro.isBlank() ? logradouro : logradouro + ", " + bairro,
                     "cidade", cidade, "estado", estado);
         } catch (HttpClientErrorException.NotFound erro) {
             throw new PedidoException(PedidoException.Tipo.ENDERECO_NAO_ENCONTRADO, "Endereço salvo não encontrado.");
@@ -59,5 +63,9 @@ public class EnderecoSalvoClient implements EnderecoSalvo {
         if (!(valor instanceof String texto) || texto.isBlank())
             throw new PedidoException(PedidoException.Tipo.ENDERECO_INCOMPLETO, "Endereço salvo incompleto.");
         return texto.trim();
+    }
+
+    private String opcional(Object valor) {
+        return valor instanceof String texto ? texto.trim() : "";
     }
 }

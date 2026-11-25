@@ -25,6 +25,11 @@ public interface PedidoRepository {
     void criarCheckout(UUID id, UUID comprador, UUID artesao, String chave, String fingerprint,
             Map<String, String> endereco, FreteDoCheckout frete, BigDecimal total, String meio, List<ItemPedido> itens);
 
+    void registrarDesconto(UUID id, UUID cupomId, String cupomCodigo, Map<String, Object> snapshot,
+            BigDecimal descontoProdutos, BigDecimal descontoFrete);
+    Optional<DescontoRegistrado> descontoDoPedido(UUID id);
+    void ajustarDesconto(UUID id, BigDecimal descontoProdutos, BigDecimal descontoFrete);
+
     void iniciarEncerramento(UUID id, String destino, String tipo, String motivo);
     void iniciarProducao(UUID id);
     void avancarEstado(UUID id, String destino);
@@ -49,8 +54,10 @@ public interface PedidoRepository {
     void concluirEncerramento(UUID id, String destino);
 
     record EtapaRegistrada(String estado, String titulo, String detalhe, String nota, OffsetDateTime criadaEm) { }
-    record PendenteArtesao(UUID id, String pecaSlug, OffsetDateTime quando, BigDecimal valor) { }
+    record PendenteArtesao(UUID id, String pecaSlug, OffsetDateTime quando, BigDecimal valor, UUID compradorId) { }
     record CheckoutExistente(UUID id, String fingerprint) { }
     record FreteDoCheckout(String id, BigDecimal valor, Map<String, Object> cotacao) { }
     record DecisaoRegistrada(UUID pedidoId, String decisao) { }
+    record DescontoRegistrado(String cupomCodigo, String descricao, boolean automatico, BigDecimal produtos,
+            BigDecimal frete, String custeadoPor) { }
 }

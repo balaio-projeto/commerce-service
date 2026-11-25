@@ -8,6 +8,8 @@ import br.com.balaio.commerce.order.application.PedidoService;
 
 import br.com.balaio.commerce.integration.catalogo.CatalogoCliente;
 import br.com.balaio.commerce.order.application.port.out.EnderecoSalvo;
+import br.com.balaio.commerce.order.application.port.out.PerfisCompradores;
+import br.com.balaio.commerce.order.application.port.out.PerfisCompradores.PerfilComprador;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,6 +99,7 @@ class PedidosHttpPostgresTest {
     @MockitoBean CatalogoCliente catalogo;
     @MockitoBean PagamentoGateway provedor;
     @MockitoBean EnderecoSalvo enderecos;
+    @MockitoBean PerfisCompradores perfis;
     @Autowired JdbcTemplate jdbc;
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -129,6 +132,8 @@ class PedidosHttpPostgresTest {
         pagamentos.preparar(id);
         pagamentos.aplicarPagamento(pagamentoId);
 
+        when(perfis.consultar(any())).thenReturn(Map.of(comprador,
+                new PerfilComprador("Ana Compradora", "/api/v1/arquivos/perfis/ana.webp")));
         String tokenArtesao = token(artesao, "artesao");
         String tokenOutro = token(outro, "artesao");
         String tokenComprador = token(comprador, "comprador");
@@ -157,8 +162,22 @@ class PedidosHttpPostgresTest {
         assertThat(partes.path("compradorId").asString()).isEqualTo(comprador.toString());
         assertThat(partes.path("artesaoId").asString()).isEqualTo(artesao.toString());
         assertThat(partes.size()).isEqualTo(2);
-        var venda = json.readTree(chamar("GET", "/api/v1/artesao/vendas", tokenArtesao, null).body())
-                .path("dados").get(0);
+        String corpoVendas = chamar("GET", "/api/v1/artesao/vendas", tokenArtesao, null).body();
+        assertThat(json.readTree(corpoVendas).path("dados").size()).isEqualTo(1);
+        var venda = json.readTree(corpoVendas).path("dados").get(0);
+        assertThat(venda.path("comprador").path("nome").asString()).isEqualTo("Ana Compradora");
+        assertThat(venda.path("comprador").path("imagem").asString()).isEqualTo("/api/v1/arquivos/perfis/ana.webp");
+        assertThat(venda.path("compradorNome").asString()).isEqualTo("Ana Compradora");
+        assertThat(venda.path("comprador").size()).isEqualTo(2);
+        assertThat(corpoVendas).doesNotContain("email", "telefone");
+        String detalheArtesao = "/api/v1/artesao/pedidos/" + id;
+        var vendaUnica = json.readTree(chamar("GET", detalheArtesao, tokenArtesao, null).body()).path("dados");
+        assertThat(vendaUnica.path("id").asString()).isEqualTo(id.toString());
+        assertThat(vendaUnica.path("comprador").path("nome").asString()).isEqualTo("Ana Compradora");
+        assertThat(vendaUnica.path("endereco").isMissingNode()).isTrue();
+        assertThat(chamar("GET", detalheArtesao, null, null).statusCode()).isEqualTo(401);
+        assertThat(chamar("GET", detalheArtesao, tokenOutro, null).statusCode()).isEqualTo(403);
+        assertThat(chamar("GET", detalheArtesao, tokenComprador, null).statusCode()).isEqualTo(403);
         assertThat(venda.path("endereco").isMissingNode()).isTrue();
         assertThat(venda.path("checkoutUrl").isMissingNode()).isTrue();
         assertThat(venda.path("estadoPagamento").isMissingNode()).isTrue();
@@ -166,6 +185,10 @@ class PedidosHttpPostgresTest {
         var lista = chamar("GET", "/api/v1/artesao/pedidos-pendentes?artesao=" + outro, tokenArtesao, null);
         assertThat(lista.statusCode()).isEqualTo(200);
         assertThat(json.readTree(lista.body()).path("dados").toString()).contains(id.toString(), slug);
+        assertThat(json.readTree(lista.body()).path("dados").size()).isEqualTo(1);
+        assertThat(json.readTree(lista.body()).path("dados").get(0).path("comprador").path("nome").asString())
+                .isEqualTo("Ana Compradora");
+        assertThat(lista.body()).doesNotContain("email");
         assertThat(json.readTree(chamar("GET", "/api/v1/artesao/pedidos-pendentes", tokenOutro, null).body())
                 .path("dados").size()).isZero();
         assertThat(chamar("GET", "/api/v1/artesao/pedidos-pendentes", tokenComprador, null).statusCode())
@@ -193,6 +216,99 @@ class PedidosHttpPostgresTest {
         assertThat(json.readTree(chamar("GET", "/api/v1/artesao/pedidos-pendentes", tokenArtesao, null).body())
                 .path("dados").size()).isZero();
         assertThat(chamar("PATCH", caminho, tokenArtesao, "{\"estado\":\"producao\"}").statusCode()).isEqualTo(409);
+    }
+
+    @Test
+    void artesaoCompraDeOutroAtelieMasNaoDoProprioEDemaisPapeisNaoCompram() throws Exception {
+        UUID artesaoComprador = UUID.randomUUID();
+        UUID outroAtelie = UUID.randomUUID();
+        String pecaAlheia = "peca-alheia-" + UUID.randomUUID();
+        String pecaPropria = "peca-propria-" + UUID.randomUUID();
+        when(catalogo.cotar(pecaAlheia)).thenReturn(new CatalogoCliente.Cotacao(pecaAlheia,
+                new BigDecimal("30.00"), "encomenda", "outro-atelie", outroAtelie));
+        when(catalogo.cotar(pecaPropria)).thenReturn(new CatalogoCliente.Cotacao(pecaPropria,
+                new BigDecimal("30.00"), "encomenda", "meu-atelie", artesaoComprador));
+        when(provedor.buscar(any())).thenReturn(List.of());
+        when(provedor.criar(any(), any(), any())).thenAnswer(chamada -> {
+            UUID id = chamada.getArgument(0);
+            return new PagamentoGateway.Preferencia("pref-" + id,
+                    "https://sandbox.mercadopago.com/checkout/pay?pref_id=pref-" + id);
+        });
+        String tokenArtesao = token(artesaoComprador, "artesao");
+        String tokenOutroAtelie = token(outroAtelie, "artesao");
+
+        var compra = checkoutHttp(tokenArtesao, pecaAlheia, corpoCheckout(pecaAlheia));
+        assertThat(compra.statusCode()).isEqualTo(202);
+        UUID pedido = UUID.fromString(json.readTree(compra.body()).path("dados").path("id").asString());
+        assertThat(jdbc.queryForObject("SELECT comprador_id FROM pedidos WHERE id = ?", UUID.class, pedido))
+                .isEqualTo(artesaoComprador);
+
+        for (String corpo : List.of(corpoCheckout(pecaPropria), corpoCheckout(pecaAlheia, pecaPropria))) {
+            var recusa = checkoutHttp(tokenArtesao, "propria-" + UUID.randomUUID(), corpo);
+            assertThat(recusa.statusCode()).isEqualTo(422);
+            assertThat(json.readTree(recusa.body()).path("erro").path("codigo").asString())
+                    .isEqualTo("PECA_DO_PROPRIO_ATELIE");
+            assertThat(json.readTree(recusa.body()).path("erro").path("mensagem").asString())
+                    .startsWith("Esta peça é do seu ateliê.");
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pedidos WHERE comprador_id = ?", Integer.class,
+                artesaoComprador)).isEqualTo(1);
+
+        assertThat(postar("/api/v1/checkout/cupom", tokenArtesao, corpoCupom(pecaPropria)).statusCode())
+                .isEqualTo(422);
+        assertThat(postar("/api/v1/checkout/cupom", tokenArtesao, corpoCupom(pecaAlheia)).statusCode())
+                .isEqualTo(200);
+
+        var lista = json.readTree(chamar("GET", "/api/v1/pedidos", tokenArtesao, null).body()).path("dados");
+        assertThat(lista.size()).isEqualTo(1);
+        assertThat(lista.get(0).path("id").asString()).isEqualTo(pedido.toString());
+        assertThat(chamar("GET", "/api/v1/pedidos/" + pedido, tokenArtesao, null).statusCode()).isEqualTo(200);
+        assertThat(json.readTree(chamar("GET", "/api/v1/pedidos", tokenOutroAtelie, null).body())
+                .path("dados").size()).isZero();
+        assertThat(chamar("GET", "/api/v1/pedidos/" + pedido, tokenOutroAtelie, null).statusCode()).isEqualTo(404);
+
+        for (String papel : List.of("organizador", "admin")) {
+            String tokenPapel = token(UUID.randomUUID(), papel);
+            assertThat(checkoutHttp(tokenPapel, papel + "-" + UUID.randomUUID(), corpoCheckout(pecaAlheia))
+                    .statusCode()).isEqualTo(403);
+            assertThat(chamar("GET", "/api/v1/pedidos", tokenPapel, null).statusCode()).isEqualTo(403);
+            assertThat(chamar("GET", "/api/v1/pedidos/" + pedido, tokenPapel, null).statusCode()).isEqualTo(403);
+            assertThat(chamar("PATCH", "/api/v1/pedidos/" + pedido + "/cancelar", tokenPapel, "{}").statusCode())
+                    .isEqualTo(403);
+            assertThat(postar("/api/v1/checkout/cupom", tokenPapel, corpoCupom(pecaAlheia)).statusCode())
+                    .isEqualTo(403);
+        }
+        assertThat(chamar("PATCH", "/api/v1/pedidos/" + pedido + "/cancelar", tokenOutroAtelie, "{}").statusCode())
+                .isEqualTo(404);
+        assertThat(chamar("PATCH", "/api/v1/pedidos/" + pedido + "/cancelar", tokenArtesao, "{}").statusCode())
+                .isBetween(200, 202);
+    }
+
+    private String corpoCupom(String slug) {
+        return """
+                {"itens":[{"slug":"%s","quantidade":1}]}
+                """.formatted(slug);
+    }
+
+    private String corpoCheckout(String... slugs) {
+        var itens = new StringBuilder();
+        for (String slug : slugs)
+            itens.append(itens.isEmpty() ? "" : ",").append("{\"slug\":\"").append(slug).append("\",\"quantidade\":1}");
+        return """
+                {"itens":[%s],"freteId":"padrao","meio":"checkout_pro",
+                 "endereco":{"cep":"52021030","endereco":"Rua","cidade":"Recife","estado":"PE"}}
+                """.formatted(itens);
+    }
+
+    private HttpResponse<String> checkoutHttp(String token, String chave, String corpo) throws Exception {
+        return http.send(requisicao("/api/v1/checkout").header("Authorization", "Bearer " + token)
+                .header("Idempotency-Key", chave).POST(HttpRequest.BodyPublishers.ofString(corpo)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> postar(String caminho, String token, String corpo) throws Exception {
+        return http.send(requisicao(caminho).header("Authorization", "Bearer " + token)
+                .POST(HttpRequest.BodyPublishers.ofString(corpo)).build(), HttpResponse.BodyHandlers.ofString());
     }
 
     @Test

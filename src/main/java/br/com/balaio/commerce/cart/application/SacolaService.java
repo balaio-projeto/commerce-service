@@ -14,6 +14,7 @@ import br.com.balaio.commerce.cart.application.port.out.CotacaoSacola.Cotacao;
 import br.com.balaio.commerce.cart.application.port.out.CotacaoSacola.ErroCotacao;
 import br.com.balaio.commerce.cart.application.port.out.SacolaRepository;
 import br.com.balaio.commerce.cart.domain.ItemSacola;
+import br.com.balaio.commerce.order.domain.RegrasCheckout;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -40,6 +41,7 @@ public class SacolaService implements SacolaUseCase {
                 if (!cotacaoValida(item, cotacao))
                     throw new SacolaException(CATALOGO_INDISPONIVEL, "Cotação inválida do catálogo.");
                 resultado.add(item.quantidadeDisponivel(cotacao.disponibilidade())
+                        && !RegrasCheckout.pecaDoProprioAtelie(comprador, cotacao.proprietarioId())
                         ? new ItemRevalidado(item.slug(), item.quantidade(), cotacao.preco(),
                                 cotacao.disponibilidade(), "disponivel")
                         : indisponivel(item));
@@ -69,6 +71,8 @@ public class SacolaService implements SacolaUseCase {
                 var cotacao = catalogo.cotarParaSacola(item.slug());
                 if (!cotacaoValida(item, cotacao) || !item.quantidadeDisponivel(cotacao.disponibilidade()))
                     throw new SacolaException(PECA_INDISPONIVEL, "Peça indisponível ou quantidade inválida.");
+                if (RegrasCheckout.pecaDoProprioAtelie(comprador, cotacao.proprietarioId()))
+                    throw new SacolaException(PECA_DO_PROPRIO_ATELIE, RegrasCheckout.MENSAGEM_PECA_DO_PROPRIO_ATELIE);
             } catch (ErroCotacao erro) {
                 switch (erro.falha()) {
                     case PECA_INDISPONIVEL -> throw new SacolaException(PECA_INDISPONIVEL, "Peça indisponível.");

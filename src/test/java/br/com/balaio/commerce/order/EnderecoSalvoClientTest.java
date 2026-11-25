@@ -41,6 +41,33 @@ class EnderecoSalvoClientTest {
     }
 
     @Test
+    void montaLogradouroComNumeroEComplementoQuandoInformados() throws Exception {
+        UUID id = UUID.randomUUID();
+        var resposta = new java.util.concurrent.atomic.AtomicReference<String>();
+        var servidor = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        servidor.createContext("/api/v1/usuario/enderecos/" + id, troca -> {
+            byte[] corpo = resposta.get().getBytes(StandardCharsets.UTF_8);
+            troca.getResponseHeaders().set("Content-Type", "application/json");
+            troca.sendResponseHeaders(200, corpo.length);
+            try (var saida = troca.getResponseBody()) { saida.write(corpo); }
+        });
+        servidor.start();
+        try {
+            var cliente = new EnderecoSalvoClient(RestClient.builder(), "http://127.0.0.1:" + servidor.getAddress().getPort());
+            resposta.set("""
+                    {"dados":{"rua":"Rua da Aurora","numero":"240","complemento":"Apto 302","bairro":"Boa Vista, Recife, PE","cep":"50050-000"}}
+                    """);
+            assertThat(cliente.consultar(id, "token")).containsEntry("endereco", "Rua da Aurora, 240 - Apto 302, Boa Vista");
+            resposta.set("""
+                    {"dados":{"rua":"Rua da Aurora","numero":"S/N","complemento":null,"bairro":"Boa Vista, Recife, PE","cep":"50050-000"}}
+                    """);
+            assertThat(cliente.consultar(id, "token")).containsEntry("endereco", "Rua da Aurora, S/N, Boa Vista");
+        } finally {
+            servidor.stop(0);
+        }
+    }
+
+    @Test
     void naoUsaEnderecoNaoEncontrado() throws Exception {
         var servidor = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         servidor.createContext("/", troca -> {

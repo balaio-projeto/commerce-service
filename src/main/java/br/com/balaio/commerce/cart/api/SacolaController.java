@@ -29,12 +29,12 @@ public class SacolaController {
 
     @GetMapping("/api/v1/estado/sacola")
     public Envelope consultar(@AuthenticationPrincipal Jwt jwt) {
-        return new Envelope(itens(sacola.consultar(PapelJwt.exigir(jwt, "comprador"))), null);
+        return new Envelope(itens(sacola.consultar(PapelJwt.exigirQuemCompra(jwt))), null);
     }
 
     @PostMapping("/api/v1/sacola/revalidar")
     public Envelope revalidar(@AuthenticationPrincipal Jwt jwt) {
-        var revalidacao = sacola.revalidar(PapelJwt.exigir(jwt, "comprador"));
+        var revalidacao = sacola.revalidar(PapelJwt.exigirQuemCompra(jwt));
         var itens = revalidacao.itens().stream().map(item -> new ItemRevalidado(item.slug(), item.quantidade(),
                 item.precoAtual(), item.disponibilidade(), item.situacao())).toList();
         return new Envelope(new Revalidacao(itens, revalidacao.podeProsseguir(), revalidacao.revalidadoEm()), null);
@@ -42,7 +42,7 @@ public class SacolaController {
 
     @PutMapping("/api/v1/estado/sacola")
     public Envelope substituir(@AuthenticationPrincipal Jwt jwt, @RequestBody JsonNode corpo) {
-        UUID id = PapelJwt.exigir(jwt, "comprador");
+        UUID id = PapelJwt.exigirQuemCompra(jwt);
         if (corpo == null || !corpo.isObject() || corpo.size() != 1 || !corpo.has("sacola")
                 || !corpo.path("sacola").isArray())
             throw invalida();

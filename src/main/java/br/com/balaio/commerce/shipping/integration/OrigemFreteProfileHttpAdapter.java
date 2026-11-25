@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClient;
 
 import br.com.balaio.commerce.shipping.application.port.out.OrigemFreteAtelie;
 import br.com.balaio.commerce.shipping.domain.Cep;
+import br.com.balaio.commerce.shipping.domain.OrigemAtelie;
 import tools.jackson.databind.JsonNode;
 
 @Component
@@ -33,7 +34,7 @@ public class OrigemFreteProfileHttpAdapter implements OrigemFreteAtelie {
     }
 
     @Override
-    public Optional<String> cepOrigem(UUID artesao) {
+    public Optional<OrigemAtelie> origem(UUID artesao) {
         if (artesao == null) return Optional.empty();
         if (token.length() < 32) {
             log.info("Token interno ausente; frete cotado a partir do CEP de origem padrão.");
@@ -42,11 +43,15 @@ public class OrigemFreteProfileHttpAdapter implements OrigemFreteAtelie {
         try {
             JsonNode resposta = http.get().uri("/internal/v1/contas/{id}/origem-frete", artesao)
                     .header("X-Balaio-Service-Token", token).retrieve().body(JsonNode.class);
-            JsonNode cep = resposta == null ? null : resposta.path("dados").path("cepOrigem");
-            Optional<String> origem = cep == null || !cep.isString() ? Optional.empty() : Cep.normalizado(cep.asString());
-            if (origem.isEmpty())
+            JsonNode dados = resposta == null ? null : resposta.path("dados");
+            if (dados == null || !dados.isObject()) return Optional.empty();
+            JsonNode cep = dados.path("cepOrigem");
+            Optional<String> cepNormalizado = cep.isString() ? Cep.normalizado(cep.asString()) : Optional.empty();
+            if (cepNormalizado.isEmpty())
                 log.debug("Ateliê sem CEP de origem configurado; frete cotado a partir do CEP de origem padrão.");
-            return origem;
+            return Optional.of(new OrigemAtelie(cepNormalizado.orElse(null), dados.path("aceitaRetirada").asBoolean(false),
+                    dados.path("aceitaEntregaLocal").asBoolean(false), texto(dados, "retiradaBairro"),
+                    texto(dados, "retiradaCidade")));
         } catch (HttpClientErrorException.NotFound naoEncontrado) {
             log.debug("Ateliê não encontrado no profile-service; frete cotado a partir do CEP de origem padrão.");
             return Optional.empty();
@@ -55,5 +60,10 @@ public class OrigemFreteProfileHttpAdapter implements OrigemFreteAtelie {
                     falha.getClass().getSimpleName());
             return Optional.empty();
         }
+    }
+
+    private static String texto(JsonNode dados, String campo) {
+        JsonNode valor = dados.path(campo);
+        return valor.isString() && !valor.asString().isBlank() ? valor.asString().trim() : null;
     }
 }
